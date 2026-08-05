@@ -1,6 +1,7 @@
 package com.vpn.client
 
 import android.util.Log
+import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.InputStream
@@ -20,7 +21,25 @@ object VPNProtocol {
     const val KEEPALIVE_INTERVAL_MS = 30_000L
     private const val IDLE_TIMEOUT_MS = 90_000
 
-    fun createTrustAllSocket(host: String, port: Int): SSLSocket {
+    /** Настройки туннеля, которые сервер выдаёт после авторизации. */
+    data class TunnelConfig(
+        val ip: String,
+        val gateway: String,
+        val netmask: String,
+        val mtu: Int,
+        val dns: List<String>
+    ) {
+        /** Длина префикса, которую ждёт VpnService.Builder.addAddress. */
+        val prefixLength: Int
+            get() = netmask.split(".")
+                .sumOf { Integer.bitCount(it.toIntOrNull()?.and(0xFF) ?: 0) }
+    }
+
+    /**
+     * [protect] должен быть VpnService.protect: без него туннель с маршрутом
+     * 0.0.0.0/0 завернул бы в себя собственное соединение с сервером.
+     */
+    fun createTrustAllSocket(host: String, port: Int, protect: (java.net.Socket) -> Boolean): SSLSocket {
         val trustAll = arrayOf(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
@@ -28,14 +47,19 @@ object VPNProtocol {
         })
         val context = SSLContext.getInstance("TLS")
         context.init(null, trustAll, java.security.SecureRandom())
+
         val socket = context.socketFactory.createSocket() as SSLSocket
+        if (!protect(socket)) {
+            socket.close()
+            throw IllegalStateException("Could not exclude the VPN socket from the tunnel")
+        }
         socket.connect(InetSocketAddress(host, port), 10_000)
         socket.soTimeout = IDLE_TIMEOUT_MS
         socket.startHandshake()
         return socket
     }
 
-    fun authenticate(socket: SSLSocket, token: String): String {
+    fun authenticate(socket: SSLSocket, token: String): TunnelConfig {
         val out = socket.getOutputStream()
         out.write((token + "\n").toByteArray())
         out.flush()
@@ -44,12 +68,25 @@ object VPNProtocol {
         if (line.startsWith("AUTH_FAIL")) {
             throw SecurityException("Authentication failed")
         }
-        if (!line.startsWith("OK")) {
+        val payload = line.removePrefix("OK ")
+        if (payload == line) {
             throw IllegalStateException("Unexpected auth response: $line")
         }
-        val parts = line.split(" ")
-        require(parts.size >= 2) { "Missing assigned IP" }
-        return parts[1]
+
+        val json = JSONObject(payload)
+        val dnsArray = json.optJSONArray("dns")
+        val dns = buildList {
+            for (i in 0 until (dnsArray?.length() ?: 0)) {
+                add(dnsArray!!.getString(i))
+            }
+        }
+        return TunnelConfig(
+            ip = json.getString("ip"),
+            gateway = json.getString("gateway"),
+            netmask = json.getString("netmask"),
+            mtu = json.getInt("mtu"),
+            dns = dns
+        )
     }
 
     // Читаем побайтово: BufferedReader утащил бы в свой буфер начало первого пакета.

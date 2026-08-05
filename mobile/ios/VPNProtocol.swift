@@ -86,18 +86,27 @@ enum VPNProtocol {
         }
     }
 
-    static func parseAssignedIP(from response: String) throws -> String {
+    /// Tunnel settings handed over by the server after a successful login.
+    struct TunnelConfig: Decodable {
+        let ip: String
+        let gateway: String
+        let netmask: String
+        let mtu: Int
+        let dns: [String]
+    }
+
+    static func parseConfig(from response: String) throws -> TunnelConfig {
         if response.hasPrefix("AUTH_FAIL") {
             throw VPNProtocolError.authFailed
         }
-        guard response.hasPrefix("OK") else {
+        guard response.hasPrefix("OK "), let data = response.dropFirst(3).data(using: .utf8) else {
             throw VPNProtocolError.invalidResponse(response)
         }
-        let parts = response.split(separator: " ")
-        guard parts.count >= 2 else {
-            throw VPNProtocolError.invalidResponse("missing IP")
+        do {
+            return try JSONDecoder().decode(TunnelConfig.self, from: data)
+        } catch {
+            throw VPNProtocolError.invalidResponse("malformed tunnel config: \(error)")
         }
-        return String(parts[1])
     }
 
     static func writePacket(_ packet: Data, on connection: NWConnection, completion: @escaping (Error?) -> Void) {

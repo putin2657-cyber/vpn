@@ -52,21 +52,24 @@ class VPNService : VpnService() {
     private fun startVpn(serverAddress: String, token: String) {
         try {
             val (host, port) = VPNProtocol.parseHostPort(serverAddress)
-            val sslSocket = VPNProtocol.createTrustAllSocket(host, port)
-            val assignedIP = VPNProtocol.authenticate(sslSocket, token)
-            Log.i(TAG, "Authenticated, IP=$assignedIP")
+            val sslSocket = VPNProtocol.createTrustAllSocket(host, port) { protect(it) }
+            val config = VPNProtocol.authenticate(sslSocket, token)
+            Log.i(TAG, "Authenticated, IP=${config.ip}, MTU=${config.mtu}")
 
             val builder = Builder()
                 .setSession("Custom VPN")
-                .addAddress(assignedIP, 24)
-                .addRoute("10.8.0.0", 24)
-                .setMtu(1500)
+                .addAddress(config.ip, config.prefixLength)
+                .addRoute("0.0.0.0", 0)
+                .setMtu(config.mtu)
+            config.dns.forEach { builder.addDnsServer(it) }
+            // Our own traffic must not re-enter the tunnel we are providing.
+            builder.addDisallowedApplication(packageName)
 
             tunInterface = builder.establish()
             socket = sslSocket
             running.set(true)
 
-            updateNotification("Connected ($assignedIP)")
+            updateNotification("Connected (${config.ip})")
             tunnelLoop(sslSocket)
         } catch (e: Exception) {
             Log.e(TAG, "VPN failed", e)

@@ -32,9 +32,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     switch result {
                     case .success(let response):
                         do {
-                            let ip = try VPNProtocol.parseAssignedIP(from: response)
-                            self?.assignedIP = ip
-                            self?.applyTunnelSettings(ip: ip, completionHandler: completionHandler)
+                            let config = try VPNProtocol.parseConfig(from: response)
+                            self?.assignedIP = config.ip
+                            self?.applyTunnelSettings(config: config, completionHandler: completionHandler)
                         } catch {
                             completionHandler(error)
                         }
@@ -53,12 +53,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         conn.start(queue: .global())
     }
 
-    private func applyTunnelSettings(ip: String, completionHandler: @escaping (Error?) -> Void) {
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: ip)
-        let ipv4 = NEIPv4Settings(addresses: [ip], subnetMasks: ["255.255.255.0"])
-        ipv4.includedRoutes = [NEIPv4Route(destinationAddress: "10.8.0.0", subnetMask: "255.255.255.0")]
+    private func applyTunnelSettings(config: VPNProtocol.TunnelConfig, completionHandler: @escaping (Error?) -> Void) {
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: config.gateway)
+        let ipv4 = NEIPv4Settings(addresses: [config.ip], subnetMasks: [config.netmask])
+        // Everything goes through the tunnel, which is what makes blocked sites
+        // reachable rather than just other VPN peers.
+        ipv4.includedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings = ipv4
-        settings.mtu = 1500
+        settings.mtu = NSNumber(value: config.mtu)
+        if !config.dns.isEmpty {
+            settings.dnsSettings = NEDNSSettings(servers: config.dns)
+        }
 
         setTunnelNetworkSettings(settings) { [weak self] error in
             if let error {
