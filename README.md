@@ -1,156 +1,143 @@
-# VPN Project
+# Self-hosted AmneziaWG VPN
 
-Custom TLS VPN with user management, Mac TUN client, iOS Network Extension, and Android VpnService.
+A small VPN for about ten people: an AmneziaWG server on a VPS abroad, managed
+from the command line, used through the official Amnezia apps on macOS, Android,
+iOS, Windows and Linux.
+
+AmneziaWG is WireGuard with junk traffic and randomised header magics. Plain
+WireGuard is easy to recognise and gets throttled on some networks; the extra
+parameters change the packet sizes and message types that give it away.
 
 ## Architecture
 
 ```
-┌─────────────┐     TLS + framed IP packets     ┌─────────────┐
-│ vpn-client  │ ◄──────────────────────────────►│ vpn-server  │
-│ (Mac/iOS/   │                                 │  :8443      │
-│  Android)   │                                 └──────┬──────┘
-└─────────────┘                                        │
-                                                       │ SQLite
-┌─────────────┐     REST :3000                         ▼
-│ vpn-admin   │ ◄──────────────────────────────►  vpn.db
-│ vpn-api     │
-└─────────────┘
+┌──────────────┐        AmneziaWG (UDP)        ┌─────────────────┐
+│ Amnezia app  │ ◄────────────────────────────►│  VPS abroad     │
+│ Mac/iOS/     │                               │  awg0 10.8.0.1  │──► internet
+│ Android/etc  │                               │  NAT + forward  │
+└──────────────┘                               └────────┬────────┘
+                                                        │
+       vpn-admin ──── writes awg0.conf ─────────────────┘
+           │
+           └── vpn.db: server identity + peers
 ```
 
-### Protocol
+The server itself is stock AmneziaWG. This project is the management layer: it
+generates keys, assigns addresses, renders configs and prints QR codes.
 
-1. Client sends `token\n`
-2. Server replies `OK 10.8.0.x\n` or `AUTH_FAIL\n`
-3. All further traffic: `[4-byte BE length][raw IPv4 packet]`
-4. A frame with length `0` is a keepalive and carries no payload
+## Requirements
 
-VPN subnet: `10.8.0.0/24`, addresses `.2`–`.250` (`.1` is reserved for the server).
+- A VPS outside your country's filtering, Debian or Ubuntu
+- Go 1.24 or newer to build the tools
 
-Both sides send a keepalive every 30s and drop a peer that has been silent for
-90s. A connection that does not send its token within 10s is closed.
+Running the server at home does not help if the goal is a different exit
+address: traffic leaves from wherever the server sits.
 
-The server forwards a packet only when its source address matches the address it
-assigned, so one client cannot inject traffic on another's address.
+## Set up
 
-## Mac (start here)
-
-### Build
+Build the tools:
 
 ```bash
-cd ~/CLionProjects/untitled3
 ./test_vpn.sh
 ```
 
-### Tests
+Create the server identity once. The endpoint is how clients reach the VPS, and
+the interface is its internet-facing NIC (`ip route show default` will name it):
 
 ```bash
-go test ./... -race
+./vpn-admin -action init -endpoint 203.0.113.10:51820 -interface eth0
 ```
 
-`cmd/server` carries end-to-end tests that start the server on a random port and
-drive real TLS clients through it: address assignment, forwarding, keepalives,
-rejection of spoofed sources, and session logging.
+Re-running `init` is refused on purpose: new keys would invalidate every config
+already handed out.
 
-### Run server
+Add a peer per device, not per person — each one needs its own address:
 
 ```bash
-./vpn-server -addr :8443 -cert server.crt -key server.key
+./vpn-admin -action add -name alice-phone
+./vpn-admin -action add -name alice-laptop
 ```
 
-### Create user
+## Hand configs to people
+
+Print a config to paste into a desktop client:
 
 ```bash
-./vpn-admin -action add -user alice -email alice@test.com
-./vpn-admin -action list   # copy token
+./vpn-admin -action config -name alice-laptop
 ```
 
-### Connection history
+Or show a QR code, which is how the phone apps import a tunnel:
 
 ```bash
-./vpn-admin -action sessions -limit 20
+./vpn-admin -action qr -name alice-phone
 ```
 
-### Connect (TUN, needs sudo)
+Configs contain the peer's private key. Send them over something private.
+
+## Deploy
+
+Generate the server config and copy it over:
 
 ```bash
-sudo ./connect_mac.sh localhost:8443 <TOKEN>
+./vpn-admin -action server-config -out awg0.conf
+scp awg0.conf deploy/install.sh root@your-vps:/tmp/
+ssh root@your-vps 'bash /tmp/install.sh /tmp/awg0.conf'
 ```
 
-Test auth without TUN:
+The script installs AmneziaWG, enables IP forwarding and starts
+`awg-quick@awg0`. NAT rules live in the config's `PostUp` lines, so the tunnel
+brings them up and tears them down with itself.
+
+Open the UDP port in your provider's firewall — that step is outside the VPS and
+is the usual reason a first attempt hangs.
+
+After adding or removing peers, ship a fresh config:
 
 ```bash
-./vpn-client -server localhost:8443 -token <TOKEN> -no-tun
+./vpn-admin -action server-config -out awg0.conf
+scp awg0.conf root@your-vps:/etc/amnezia/amneziawg/awg0.conf
+ssh root@your-vps 'systemctl restart awg-quick@awg0'
 ```
 
-### Ping between two Mac clients
+## Clients
 
-1. Start server
-2. Add two users, connect two terminals with different tokens
-3. Each client gets `10.8.0.x` — ping the peer IP from another client
+Install the Amnezia app on each device, import the config or scan the QR code.
+The apps handle reconnection, sleep and network changes themselves.
 
-## iOS
-
-Files are in `mobile/ios/`.
-
-### Xcode setup
-
-1. Create **App** project (SwiftUI), bundle id e.g. `com.vpn.client`
-2. Add **Network Extension → Packet Tunnel Provider** target, bundle id `com.vpn.client.PacketTunnel`
-3. Copy files:
-   - `VPNProtocol.swift` → shared by App + Extension
-   - `ContentView.swift`, `VPNManager.swift` → App target
-   - `PacketTunnel/PacketTunnelProvider.swift` → Extension target
-4. Enable **Personal VPN** capability on both targets
-5. Set `providerBundleIdentifier` in `VPNManager.swift` to your extension bundle id
-6. For device testing: use your Mac LAN IP instead of `127.0.0.1`
-
-> Apple requires a paid Developer account for Network Extension on a physical device.
-
-## Android
-
-Project: `mobile/android/`
-
-There is no Gradle wrapper checked in, so the simplest route is to open
-`mobile/android` in Android Studio and let it generate the wrapper and fetch the
-SDK. From a shell you would need a JDK, the Android SDK, and:
+Confirm it works by checking your address changes:
 
 ```bash
-cd mobile/android
-gradle wrapper        # once, to create ./gradlew
-./gradlew assembleDebug
+curl -s https://api.ipify.org
 ```
 
-- Emulator → server: use `10.0.2.2:8443` (host machine)
-- Physical device → use your Mac's LAN IP, e.g. `192.168.1.x:8443`
+## Admin API
 
-Grant VPN permission when prompted.
-
-## REST API
+Optional HTTP interface for the desktop panel. It can mint and read peer keys,
+so it binds to loopback and requires a bearer token:
 
 ```bash
-./vpn-api -port 3000
-curl http://localhost:3000/health
-curl http://localhost:3000/api/users
+./vpn-api -addr 127.0.0.1:3000 -token "$(openssl rand -hex 24)"
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/peers
 ```
 
-## Security notes (dev only)
+Without `-token` one is generated and printed at startup.
 
-- TLS uses self-signed cert; clients skip verification, so the tunnel is
-  trivially MITM-able on a hostile network
-- Tokens are stored in plaintext in SQLite
-- The REST API on `:3000` has no authentication and permits any origin, while
-  exposing every user's token — do not bind it to a public interface
-- Not suitable for production without hardening
-
-## Project layout
+## Layout
 
 | Path | Description |
 |------|-------------|
-| `cmd/server` | VPN server |
-| `cmd/client-advanced` | Mac client with TUN |
-| `cmd/admin` | User CLI |
-| `cmd/api` | REST API |
-| `pkg/protocol` | Wire protocol |
-| `pkg/tun` | macOS/Linux TUN (water) |
-| `mobile/ios` | SwiftUI + Packet Tunnel |
-| `mobile/android` | Kotlin VpnService |
+| `pkg/awg` | Keys, obfuscation parameters, config rendering |
+| `pkg/db` | Server identity and peers in SQLite |
+| `cmd/admin` | Command line management |
+| `cmd/api` | HTTP API for the desktop panel |
+| `deploy` | VPS installation script |
+| `desktop` | Electron admin panel |
+
+## Notes
+
+- `vpn.db` holds every peer's private key, so the database is as sensitive as
+  the configs themselves. Back it up somewhere encrypted.
+- Obfuscation parameters are generated per deployment and stored in the
+  database; server and clients must use identical values.
+- If the VPS address gets blocked, rotating it means a new `-endpoint` and
+  reissuing configs. Pick a provider where changing the address is cheap.
