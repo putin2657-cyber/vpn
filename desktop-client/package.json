@@ -1,0 +1,35 @@
+{
+  "name": "vpn-client-desktop",
+  "version": "1.0.0",
+  "description": "Simple desktop UI for connecting to the VPN",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^43.3.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.vpn.client.desktop",
+    "productName": "VPN Client",
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "renderer.js",
+      "style.css"
+    ],
+    "extraResources": [
+      {
+        "from": "../vpn-client",
+        "to": "vpn-client"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": "dmg"
+    }
+  }
+}

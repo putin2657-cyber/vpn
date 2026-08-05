@@ -2,23 +2,34 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var vpn = VPNManager()
-    @State private var serverAddress = "127.0.0.1:8443"
-    @State private var token = ""
-    @State private var showError = false
-    @State private var errorMessage = ""
+    @AppStorage("serverAddress") private var serverAddress = "127.0.0.1:8443"
+    @AppStorage("token") private var token = ""
+
+    private var canConnect: Bool {
+        !serverAddress.isEmpty && !token.isEmpty && !vpn.isBusy
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Status") {
-                    LabeledContent("Connection", value: vpn.statusMessage)
-                    LabeledContent("Assigned IP", value: vpn.assignedIP)
+                    HStack {
+                        Circle()
+                            .fill(vpn.isConnected ? .green : .secondary)
+                            .frame(width: 10, height: 10)
+                        Text(vpn.statusMessage)
+                        if vpn.isBusy {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
                 }
 
                 Section("Server") {
                     TextField("Server (host:port)", text: $serverAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .keyboardType(.URL)
                         .disabled(vpn.isConnected)
 
                     SecureField("Token", text: $token)
@@ -34,20 +45,26 @@ struct ContentView: View {
                         }
                     } else {
                         Button("Connect") {
-                            Task {
-                                await vpn.connect(server: serverAddress, token: token)
-                            }
+                            Task { await vpn.connect(server: serverAddress, token: token) }
                         }
-                        .disabled(token.isEmpty || serverAddress.isEmpty)
+                        .disabled(!canConnect)
+                    }
+                }
+
+                if let errorMessage = vpn.errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
                     }
                 }
             }
             .navigationTitle("VPN Client")
-            .task { await vpn.loadProfile() }
-            .alert("Error", isPresented: $showError) {
-                Button("OK") {}
-            } message: {
-                Text(errorMessage)
+            .task {
+                await vpn.loadProfile()
+                if serverAddress.isEmpty, !vpn.savedServer.isEmpty {
+                    serverAddress = vpn.savedServer
+                }
             }
         }
     }

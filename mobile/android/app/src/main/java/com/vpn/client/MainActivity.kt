@@ -1,5 +1,6 @@
 package com.vpn.client
 
+import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
@@ -23,15 +24,41 @@ class MainActivity : AppCompatActivity() {
         tokenInput = findViewById(R.id.tokenInput)
         connectButton = findViewById(R.id.connectButton)
 
-        serverInput.setText("10.0.2.2:8443")
+        restoreCredentials()
 
         connectButton.setOnClickListener {
-            if (connectButton.text == getString(R.string.disconnect)) {
-                stopVpn()
-            } else {
-                startVpn()
+            when (VpnStateBus.current) {
+                is VpnState.Connected, is VpnState.Connecting -> stopVpn()
+                else -> startVpn()
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        VpnStateBus.observe(::render)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        VpnStateBus.observe(null)
+    }
+
+    private fun render(state: VpnState) {
+        val connecting = state is VpnState.Connecting
+        val connected = state is VpnState.Connected
+
+        statusView.text = when (state) {
+            is VpnState.Disconnected -> getString(R.string.status_disconnected)
+            is VpnState.Connecting -> getString(R.string.status_connecting)
+            is VpnState.Connected -> getString(R.string.status_connected, state.ip)
+            is VpnState.Failed -> getString(R.string.status_failed, state.reason)
+        }
+
+        connectButton.text =
+            if (connected || connecting) getString(R.string.disconnect) else getString(R.string.connect)
+        serverInput.isEnabled = !connected && !connecting
+        tokenInput.isEnabled = !connected && !connecting
     }
 
     private fun startVpn() {
@@ -41,12 +68,14 @@ class MainActivity : AppCompatActivity() {
             statusView.text = getString(R.string.error_missing_fields)
             return
         }
+        saveCredentials(server, token)
 
-        val prepare = VpnService.prepare(this)
-        if (prepare != null) {
-            startActivityForResult(prepare, REQUEST_VPN)
+        // Android shows a consent dialog the first time an app asks to act as a VPN.
+        val consent = VpnService.prepare(this)
+        if (consent != null) {
             pendingServer = server
             pendingToken = token
+            startActivityForResult(consent, REQUEST_VPN)
             return
         }
         launchVpn(server, token)
@@ -54,36 +83,52 @@ class MainActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_VPN && resultCode == RESULT_OK) {
+        if (requestCode != REQUEST_VPN) return
+
+        if (resultCode == RESULT_OK) {
             launchVpn(pendingServer, pendingToken)
+        } else {
+            VpnStateBus.publish(VpnState.Failed(getString(R.string.error_permission_denied)))
         }
     }
 
     private fun launchVpn(server: String, token: String) {
-        val intent = Intent(this, VPNService::class.java).apply {
+        startForegroundService(Intent(this, VPNService::class.java).apply {
             action = VPNService.ACTION_CONNECT
             putExtra(VPNService.EXTRA_SERVER, server)
             putExtra(VPNService.EXTRA_TOKEN, token)
-        }
-        startForegroundService(intent)
-        statusView.text = getString(R.string.status_connecting)
-        connectButton.text = getString(R.string.disconnect)
-        serverInput.isEnabled = false
-        tokenInput.isEnabled = false
+        })
+        VpnStateBus.publish(VpnState.Connecting)
     }
 
     private fun stopVpn() {
         startService(Intent(this, VPNService::class.java).apply {
             action = VPNService.ACTION_DISCONNECT
         })
-        statusView.text = getString(R.string.status_disconnected)
-        connectButton.text = getString(R.string.connect)
-        serverInput.isEnabled = true
-        tokenInput.isEnabled = true
     }
+
+    private fun saveCredentials(server: String, token: String) {
+        prefs().edit()
+            .putString(KEY_SERVER, server)
+            .putString(KEY_TOKEN, token)
+            .apply()
+    }
+
+    private fun restoreCredentials() {
+        val saved = prefs()
+        serverInput.setText(saved.getString(KEY_SERVER, DEFAULT_SERVER))
+        tokenInput.setText(saved.getString(KEY_TOKEN, ""))
+    }
+
+    private fun prefs() = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     companion object {
         private const val REQUEST_VPN = 1001
+        private const val PREFS = "vpn_client"
+        private const val KEY_SERVER = "server"
+        private const val KEY_TOKEN = "token"
+        private const val DEFAULT_SERVER = "10.0.2.2:8443"
+
         private var pendingServer = ""
         private var pendingToken = ""
     }

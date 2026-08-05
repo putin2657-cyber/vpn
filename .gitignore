@@ -16,6 +16,8 @@ server.key
 desktop/node_modules/
 desktop/build/
 desktop/dist/
+desktop-client/node_modules/
+desktop-client/dist/
 
 # Android
 mobile/android/.gradle/

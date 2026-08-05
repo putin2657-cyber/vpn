@@ -50,6 +50,7 @@ class VPNService : VpnService() {
     }
 
     private fun startVpn(serverAddress: String, token: String) {
+        VpnStateBus.publish(VpnState.Connecting)
         try {
             val (host, port) = VPNProtocol.parseHostPort(serverAddress)
             val sslSocket = VPNProtocol.createTrustAllSocket(host, port) { protect(it) }
@@ -70,10 +71,12 @@ class VPNService : VpnService() {
             running.set(true)
 
             updateNotification("Connected (${config.ip})")
+            VpnStateBus.publish(VpnState.Connected(config.ip))
             tunnelLoop(sslSocket)
         } catch (e: Exception) {
             Log.e(TAG, "VPN failed", e)
             updateNotification("Error: ${e.message}")
+            VpnStateBus.publish(VpnState.Failed(e.message ?: e.javaClass.simpleName))
             stopVpn()
         }
     }
@@ -130,6 +133,10 @@ class VPNService : VpnService() {
         try { tunInterface?.close() } catch (_: Exception) {}
         socket = null
         tunInterface = null
+        // Не затираем причину сбоя: пользователю важнее увидеть её, чем «отключено».
+        if (VpnStateBus.current !is VpnState.Failed) {
+            VpnStateBus.publish(VpnState.Disconnected)
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
