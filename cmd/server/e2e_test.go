@@ -19,6 +19,7 @@ import (
 	"vpn-server/pkg/db"
 	"vpn-server/pkg/protocol"
 	"vpn-server/pkg/routing"
+	"vpn-server/pkg/tun"
 )
 
 // startTestServer brings the server up on a random port with a throwaway
@@ -89,6 +90,7 @@ func addTestUser(t *testing.T, name string) string {
 type testClient struct {
 	conn net.Conn
 	ip   net.IP
+	cfg  *protocol.Config
 }
 
 func dialClient(t *testing.T, addr, token string) *testClient {
@@ -109,11 +111,11 @@ func dialClient(t *testing.T, addr, token string) *testClient {
 	if err != nil {
 		t.Fatalf("read auth response: %v", err)
 	}
-	ip, err := protocol.ParseAuthResponse(line)
+	cfg, err := protocol.ParseAuthResponse(line)
 	if err != nil {
 		t.Fatalf("auth as %s: %v", token, err)
 	}
-	return &testClient{conn: conn, ip: ip.To4()}
+	return &testClient{conn: conn, ip: cfg.Addr(), cfg: cfg}
 }
 
 // readPacket returns the next real packet, skipping keepalive frames.
@@ -164,6 +166,26 @@ func TestClientsGetDistinctSubnetAddresses(t *testing.T) {
 	}
 	if bob.ip.String() != "10.8.0.3" {
 		t.Errorf("bob got %s, want 10.8.0.3", bob.ip)
+	}
+}
+
+// Clients cannot build a working tunnel from the address alone.
+func TestAuthResponseCarriesTunnelConfig(t *testing.T) {
+	addr := startTestServer(t)
+
+	client := dialClient(t, addr, addTestUser(t, "alice"))
+
+	if client.cfg.Gateway != gatewayIP.String() {
+		t.Errorf("gateway is %q, want %s", client.cfg.Gateway, gatewayIP)
+	}
+	if ones, _ := client.cfg.Mask().Size(); ones != 24 {
+		t.Errorf("netmask is /%d, want /24", ones)
+	}
+	if client.cfg.MTU != tun.DefaultMTU {
+		t.Errorf("MTU is %d, want %d", client.cfg.MTU, tun.DefaultMTU)
+	}
+	if len(client.cfg.DNS) == 0 {
+		t.Error("no DNS servers were sent, clients would resolve nothing")
 	}
 }
 

@@ -23,6 +23,7 @@ var (
 	serverAddr = flag.String("server", "localhost:8443", "VPN server address")
 	token      = flag.String("token", "", "authentication token")
 	skipTUN    = flag.Bool("no-tun", false, "connect without creating a TUN device (testing mode)")
+	fullTunnel = flag.Bool("full", true, "send all traffic through the VPN, not just the VPN subnet")
 )
 
 // Must mirror the server: keepalives have to arrive well inside its idle window.
@@ -40,6 +41,7 @@ type VPNClient struct {
 	token       string
 	serverAddr  string
 	tunDev      *tun.Device
+	restore     func()
 	mu          sync.Mutex
 	writeMu     sync.Mutex
 	isConnected bool
@@ -147,28 +149,42 @@ func (vc *VPNClient) Connect() error {
 		return fmt.Errorf("auth response read failed: %w", err)
 	}
 
-	assignedIP, err := protocol.ParseAuthResponse(line)
+	cfg, err := protocol.ParseAuthResponse(line)
 	if err != nil {
 		conn.Close()
 		return err
 	}
 
 	vc.conn = conn
-	vc.assignedIP = assignedIP.To4()
+	vc.assignedIP = cfg.Addr()
 	vc.isConnected = true
-	log.Printf("Authenticated, assigned IP: %s", vc.assignedIP)
+	log.Printf("Authenticated, assigned IP: %s (gateway %s, MTU %d)",
+		cfg.IP, cfg.Gateway, cfg.MTU)
 
 	if *skipTUN {
 		return nil
 	}
 
-	mask := net.CIDRMask(24, 32)
-	dev, err := tun.Open(vc.assignedIP, mask)
+	dev, err := tun.OpenWithMTU(cfg.Addr(), cfg.Mask(), cfg.MTU)
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("TUN setup failed (run with sudo): %w", err)
 	}
 	vc.tunDev = dev
+
+	if *fullTunnel {
+		serverIP := conn.RemoteAddr().(*net.TCPAddr).IP
+		restore, err := tun.Redirect(dev, serverIP, cfg.DNS)
+		if err != nil {
+			dev.Close()
+			conn.Close()
+			return fmt.Errorf("could not redirect traffic through the tunnel: %w", err)
+		}
+		vc.restore = restore
+	} else {
+		log.Println("split mode: only VPN subnet traffic uses the tunnel")
+	}
+
 	return nil
 }
 
@@ -263,6 +279,14 @@ func (vc *VPNClient) Disconnect() error {
 	defer vc.mu.Unlock()
 
 	vc.isConnected = false
+
+	// Restore routing and DNS before the interface disappears, otherwise the
+	// machine is left without a working default route.
+	if vc.restore != nil {
+		vc.restore()
+		vc.restore = nil
+	}
+
 	var err error
 	if vc.tunDev != nil {
 		err = vc.tunDev.Close()

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -84,9 +85,38 @@ func ReadAuthToken(r io.Reader) (string, error) {
 	return "", fmt.Errorf("auth token exceeds %d bytes", maxAuthLineLen)
 }
 
-// WriteAuthOK sends assigned IP after successful authentication.
-func WriteAuthOK(w io.Writer, ip net.IP) error {
-	_, err := fmt.Fprintf(w, "OK %s\n", ip.String())
+// Config is the tunnel setup the server hands a client once it is authorised.
+// It travels as one JSON line so fields can be added without a new handshake.
+type Config struct {
+	IP      string   `json:"ip"`
+	Gateway string   `json:"gateway"`
+	Netmask string   `json:"netmask"`
+	MTU     int      `json:"mtu"`
+	DNS     []string `json:"dns"`
+}
+
+// Addr returns the address assigned to the client.
+func (c *Config) Addr() net.IP {
+	return net.ParseIP(c.IP).To4()
+}
+
+// Mask returns the tunnel netmask.
+func (c *Config) Mask() net.IPMask {
+	return net.IPMask(net.ParseIP(c.Netmask).To4())
+}
+
+// GatewayAddr returns the server's address inside the tunnel.
+func (c *Config) GatewayAddr() net.IP {
+	return net.ParseIP(c.Gateway).To4()
+}
+
+// WriteAuthOK sends the tunnel configuration after successful authentication.
+func WriteAuthOK(w io.Writer, cfg Config) error {
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "OK %s\n", body)
 	return err
 }
 
@@ -96,24 +126,34 @@ func WriteAuthFail(w io.Writer) error {
 	return err
 }
 
-// ParseAuthResponse parses "OK 10.8.0.2" or "AUTH_FAIL".
-func ParseAuthResponse(raw string) (net.IP, error) {
+// ParseAuthResponse parses `OK {json}` or `AUTH_FAIL`.
+func ParseAuthResponse(raw string) (*Config, error) {
 	raw = strings.TrimSpace(raw)
 	if strings.HasPrefix(raw, "AUTH_FAIL") {
 		return nil, fmt.Errorf("authentication failed")
 	}
-	if !strings.HasPrefix(raw, "OK") {
+	payload, ok := strings.CutPrefix(raw, "OK ")
+	if !ok {
 		return nil, fmt.Errorf("unexpected auth response: %q", raw)
 	}
-	parts := strings.Fields(raw)
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("missing assigned IP in auth response")
+
+	var cfg Config
+	if err := json.Unmarshal([]byte(payload), &cfg); err != nil {
+		return nil, fmt.Errorf("malformed tunnel config %q: %w", payload, err)
 	}
-	ip := net.ParseIP(parts[1])
-	if ip == nil {
-		return nil, fmt.Errorf("invalid assigned IP: %q", parts[1])
+	if cfg.Addr() == nil {
+		return nil, fmt.Errorf("invalid assigned IP: %q", cfg.IP)
 	}
-	return ip, nil
+	if cfg.GatewayAddr() == nil {
+		return nil, fmt.Errorf("invalid gateway: %q", cfg.Gateway)
+	}
+	if cfg.Mask() == nil {
+		return nil, fmt.Errorf("invalid netmask: %q", cfg.Netmask)
+	}
+	if cfg.MTU < 576 || cfg.MTU > MaxPacketSize {
+		return nil, fmt.Errorf("implausible MTU: %d", cfg.MTU)
+	}
+	return &cfg, nil
 }
 
 // SrcIP extracts the IPv4 source from a raw IP packet.

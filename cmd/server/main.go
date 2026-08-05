@@ -261,9 +261,18 @@ func handleConn(c net.Conn) {
 	}
 	defer ipPool.Release(ip)
 
+	ones, _ := vpnSubnet.Mask.Size()
+	cfg := protocol.Config{
+		IP:      ip.String(),
+		Gateway: gatewayIP.String(),
+		Netmask: net.IP(net.CIDRMask(ones, 32)).String(),
+		MTU:     tun.DefaultMTU,
+		DNS:     dnsServers,
+	}
+
 	// Send the assignment before registering, so no forwarded packet can land
 	// in front of the auth line the client is still parsing.
-	if err := protocol.WriteAuthOK(c, ip); err != nil {
+	if err := protocol.WriteAuthOK(c, cfg); err != nil {
 		log.Printf("failed to send auth OK to %s: %v", user.Username, err)
 		return
 	}

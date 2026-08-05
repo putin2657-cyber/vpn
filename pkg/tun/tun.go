@@ -3,6 +3,7 @@ package tun
 import (
 	"fmt"
 	"net"
+	"os/exec"
 
 	"github.com/songgao/water"
 )
@@ -70,6 +71,21 @@ func (d *Device) Read() ([]byte, error) {
 
 func (d *Device) Write(pkt []byte) (int, error) {
 	return d.iface.Write(pkt)
+}
+
+// Redirect routes all traffic through the tunnel, except the connection to the
+// VPN server itself. The returned function puts the previous routing and DNS
+// configuration back.
+func Redirect(dev *Device, serverIP net.IP, dns []string) (func(), error) {
+	return redirect(dev, serverIP, dns)
+}
+
+func run(name string, args ...string) error {
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s", name, err, out)
+	}
+	return nil
 }
 
 func (d *Device) Close() error {
