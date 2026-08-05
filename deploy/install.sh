@@ -32,9 +32,20 @@ apt-get install -y -qq "linux-headers-$(uname -r)" || {
     apt-get install -y -qq linux-headers-generic
 }
 
-if ! grep -rq "amnezia" /etc/apt/sources.list.d/ 2>/dev/null; then
-    add-apt-repository -y ppa:amnezia/ppa
-    apt-get update -qq
+. /etc/os-release
+# Ubuntu 26.04 (resolute) is too new for the Amnezia PPA; use noble packages and
+# let DKMS build the module against the running kernel.
+if ! apt-cache show amneziawg >/dev/null 2>&1; then
+    if ! add-apt-repository -y ppa:amnezia/ppa 2>/dev/null || ! apt-get update -qq; then
+        echo "PPA has no packages for $VERSION_CODENAME; falling back to noble"
+        install -d -m 755 /etc/apt/keyrings
+        curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x75C9DD72C799870E310542E24166F2C257290828" \
+            | gpg --dearmor -o /etc/apt/keyrings/amnezia-ppa.gpg
+        cat > /etc/apt/sources.list.d/amnezia-ppa.list <<EOF
+deb [signed-by=/etc/apt/keyrings/amnezia-ppa.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main
+EOF
+        apt-get update -qq
+    fi
 fi
 apt-get install -y -qq amneziawg amneziawg-tools
 

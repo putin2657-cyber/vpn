@@ -9,6 +9,11 @@
 *.db-wal
 *.db-shm
 
+# Generated peer and server configs contain private keys
+*.conf
+awg0.conf
+my-phone.conf
+
 # TLS private key
 server.key
 
