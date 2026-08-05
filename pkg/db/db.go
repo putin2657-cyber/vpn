@@ -1,198 +1,387 @@
+// Package db stores the AmneziaWG deployment: the server's own identity and
+// the peers allowed to connect.
 package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"net"
+	"strings"
+
 	_ "github.com/mattn/go-sqlite3"
+
+	"vpn-server/pkg/awg"
 )
 
-// User представляет VPN пользователя
-type User struct {
-	ID       int    `json:"id"`
-	Username string `json:"username"`
-	Token    string `json:"token"`
-	Email    string `json:"email"`
-	Created  string `json:"created"`
+// ErrNotInitialised means no server identity exists yet; run the init action.
+var ErrNotInitialised = errors.New("server is not initialised")
+
+// ErrPeerNotFound is returned when no peer matches the requested name.
+var ErrPeerNotFound = errors.New("peer not found")
+
+// Peer is one client device together with the keys handed to it.
+//
+// Keeping a peer's private key on the server is a deliberate trade-off: it lets
+// the admin regenerate a config or QR code at any time, at the cost of the
+// database being enough to impersonate any peer. For a handful of people run by
+// one admin that is the usual arrangement, but the file deserves care.
+type Peer struct {
+	ID           int
+	Name         string
+	PrivateKey   awg.Key
+	PublicKey    awg.Key
+	PresharedKey awg.Key
+	Address      net.IP
+	Created      string
 }
 
-// DB управляет подключением к SQLite
 type DB struct {
 	conn *sql.DB
 }
 
-// Open открывает или создает базу данных
 func Open(path string) (*DB, error) {
 	conn, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err
 	}
-	// Сервер, API и admin CLI работают с одним файлом: WAL позволяет читать во
-	// время записи, busy_timeout переживает короткие блокировки.
+	// The admin CLI and the API may both hold the file open.
 	if _, err := conn.Exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;"); err != nil {
 		conn.Close()
 		return nil, err
 	}
+
 	db := &DB{conn: conn}
 	if err := db.init(); err != nil {
+		conn.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
-// init создает таблицы если их еще нет
 func (db *DB) init() error {
 	schema := `
-	CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username TEXT UNIQUE NOT NULL,
-		token TEXT UNIQUE NOT NULL,
-		email TEXT,
+	CREATE TABLE IF NOT EXISTS server (
+		id                 INTEGER PRIMARY KEY CHECK (id = 1),
+		private_key        TEXT NOT NULL,
+		public_key         TEXT NOT NULL,
+		endpoint           TEXT NOT NULL,
+		listen_port        INTEGER NOT NULL,
+		address            TEXT NOT NULL,
+		subnet             TEXT NOT NULL,
+		mtu                INTEGER NOT NULL,
+		dns                TEXT NOT NULL,
+		external_interface TEXT NOT NULL,
+		jc   INTEGER NOT NULL, jmin INTEGER NOT NULL, jmax INTEGER NOT NULL,
+		s1   INTEGER NOT NULL, s2   INTEGER NOT NULL,
+		h1   INTEGER NOT NULL, h2   INTEGER NOT NULL,
+		h3   INTEGER NOT NULL, h4   INTEGER NOT NULL,
 		created DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
-	CREATE TABLE IF NOT EXISTS vpn_logs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER NOT NULL,
-		action TEXT,
-		ip_assigned TEXT,
-		connected_at DATETIME,
-		disconnected_at DATETIME,
-		FOREIGN KEY(user_id) REFERENCES users(id)
+	CREATE TABLE IF NOT EXISTS peers (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		name          TEXT UNIQUE NOT NULL,
+		private_key   TEXT NOT NULL,
+		public_key    TEXT UNIQUE NOT NULL,
+		preshared_key TEXT NOT NULL,
+		address       TEXT UNIQUE NOT NULL,
+		created       DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	`
 	_, err := db.conn.Exec(schema)
 	return err
 }
 
-// AddUser добавляет нового пользователя
-func (db *DB) AddUser(username, token, email string) (*User, error) {
-	result, err := db.conn.Exec(
-		"INSERT INTO users (username, token, email) VALUES (?, ?, ?)",
-		username, token, email,
+// SaveServer stores the server identity. There is only ever one row: replacing
+// it would invalidate every client config already handed out.
+func (db *DB) SaveServer(s *awg.Server) error {
+	ones, _ := s.Subnet.Mask.Size()
+	o := s.Obfuscation
+
+	_, err := db.conn.Exec(`
+		INSERT OR REPLACE INTO server (
+			id, private_key, public_key, endpoint, listen_port, address, subnet,
+			mtu, dns, external_interface, jc, jmin, jmax, s1, s2, h1, h2, h3, h4
+		) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.PrivateKey.String(), s.PublicKey.String(), s.Endpoint, s.ListenPort,
+		s.Address.String(), fmt.Sprintf("%s/%d", s.Subnet.IP, ones),
+		s.MTU, strings.Join(s.DNS, ","), s.ExternalInterface,
+		o.JunkPacketCount, o.JunkPacketMinSize, o.JunkPacketMaxSize,
+		o.InitPacketJunkSize, o.ResponsePacketJunkSize,
+		o.InitPacketMagic, o.ResponsePacketMagic,
+		o.UnderloadPacketMagic, o.TransportPacketMagic,
 	)
+	return err
+}
+
+// Server loads the stored identity, or ErrNotInitialised if there is none.
+func (db *DB) Server() (*awg.Server, error) {
+	var (
+		privateKey, publicKey, endpoint string
+		address, subnet, dns, external  string
+		listenPort, mtu                 int
+		o                               awg.Obfuscation
+	)
+
+	err := db.conn.QueryRow(`
+		SELECT private_key, public_key, endpoint, listen_port, address, subnet,
+		       mtu, dns, external_interface, jc, jmin, jmax, s1, s2, h1, h2, h3, h4
+		FROM server WHERE id = 1`,
+	).Scan(&privateKey, &publicKey, &endpoint, &listenPort, &address, &subnet,
+		&mtu, &dns, &external,
+		&o.JunkPacketCount, &o.JunkPacketMinSize, &o.JunkPacketMaxSize,
+		&o.InitPacketJunkSize, &o.ResponsePacketJunkSize,
+		&o.InitPacketMagic, &o.ResponsePacketMagic,
+		&o.UnderloadPacketMagic, &o.TransportPacketMagic)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotInitialised
+	}
 	if err != nil {
 		return nil, err
+	}
+
+	private, err := awg.ParseKey(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("stored server private key: %w", err)
+	}
+	public, err := awg.ParseKey(publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("stored server public key: %w", err)
+	}
+	_, network, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return nil, fmt.Errorf("stored subnet %q: %w", subnet, err)
+	}
+
+	return &awg.Server{
+		PrivateKey:        private,
+		PublicKey:         public,
+		Endpoint:          endpoint,
+		ListenPort:        listenPort,
+		Address:           net.ParseIP(address),
+		Subnet:            network,
+		MTU:               mtu,
+		DNS:               splitDNS(dns),
+		ExternalInterface: external,
+		Obfuscation:       o,
+	}, nil
+}
+
+func splitDNS(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	parts := strings.Split(joined, ",")
+	servers := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			servers = append(servers, trimmed)
+		}
+	}
+	return servers
+}
+
+// AddPeer generates a fresh keypair, assigns the lowest free address in the
+// subnet and stores the result.
+func (db *DB) AddPeer(name string) (*Peer, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("peer name is required")
+	}
+
+	server, err := db.Server()
+	if err != nil {
+		return nil, err
+	}
+
+	address, err := db.nextFreeAddress(server)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := awg.GenerateKeypair()
+	if err != nil {
+		return nil, err
+	}
+	preshared, err := awg.GeneratePresharedKey()
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := db.conn.Exec(`
+		INSERT INTO peers (name, private_key, public_key, preshared_key, address)
+		VALUES (?, ?, ?, ?, ?)`,
+		name, keys.Private.String(), keys.Public.String(),
+		preshared.String(), address.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("add peer %q: %w", name, err)
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
 		return nil, err
 	}
-	return &User{
-		ID:       int(id),
-		Username: username,
-		Token:    token,
-		Email:    email,
+
+	return &Peer{
+		ID:           int(id),
+		Name:         name,
+		PrivateKey:   keys.Private,
+		PublicKey:    keys.Public,
+		PresharedKey: preshared,
+		Address:      address,
 	}, nil
 }
 
-// GetUser получает пользователя по токену
-func (db *DB) GetUser(token string) (*User, error) {
-	user := &User{}
-	err := db.conn.QueryRow(
-		"SELECT id, username, token, email, created FROM users WHERE token = ?",
-		token,
-	).Scan(&user.ID, &user.Username, &user.Token, &user.Email, &user.Created)
+// nextFreeAddress returns the lowest host address in the subnet that is neither
+// the server's nor already taken by a peer.
+func (db *DB) nextFreeAddress(server *awg.Server) (net.IP, error) {
+	taken := map[string]bool{server.Address.String(): true}
+
+	rows, err := db.conn.Query("SELECT address FROM peers")
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("user not found")
-		}
 		return nil, err
 	}
-	return user, nil
+	defer rows.Close()
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		taken[address] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	base := server.Subnet.IP.To4()
+	if base == nil {
+		return nil, fmt.Errorf("subnet %s is not IPv4", server.Subnet)
+	}
+	ones, bits := server.Subnet.Mask.Size()
+	// The network and broadcast addresses are not usable hosts.
+	hostCount := 1<<(bits-ones) - 2
+
+	for offset := 1; offset <= hostCount; offset++ {
+		candidate := make(net.IP, net.IPv4len)
+		copy(candidate, base)
+		if err := addOffset(candidate, offset); err != nil {
+			return nil, err
+		}
+		if !taken[candidate.String()] {
+			return candidate, nil
+		}
+	}
+	return nil, fmt.Errorf("subnet %s is full", server.Subnet)
 }
 
-// ListUsers возвращает всех пользователей
-func (db *DB) ListUsers() ([]*User, error) {
-	rows, err := db.conn.Query(
-		"SELECT id, username, token, email, created FROM users",
-	)
+func addOffset(ip net.IP, offset int) error {
+	value := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+	value += uint32(offset)
+	ip[0] = byte(value >> 24)
+	ip[1] = byte(value >> 16)
+	ip[2] = byte(value >> 8)
+	ip[3] = byte(value)
+	return nil
+}
+
+func (db *DB) ListPeers() ([]*Peer, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, name, private_key, public_key, preshared_key, address, created
+		FROM peers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var users []*User
+	var peers []*Peer
 	for rows.Next() {
-		user := &User{}
-		err := rows.Scan(&user.ID, &user.Username, &user.Token, &user.Email, &user.Created)
+		peer, err := scanPeer(rows)
 		if err != nil {
 			return nil, err
 		}
-		users = append(users, user)
+		peers = append(peers, peer)
 	}
-	return users, rows.Err()
+	return peers, rows.Err()
 }
 
-// DeleteUser удаляет пользователя по ID
-func (db *DB) DeleteUser(id int) error {
-	_, err := db.conn.Exec("DELETE FROM users WHERE id = ?", id)
-	return err
+func (db *DB) GetPeer(name string) (*Peer, error) {
+	row := db.conn.QueryRow(`
+		SELECT id, name, private_key, public_key, preshared_key, address, created
+		FROM peers WHERE name = ?`, name)
+
+	peer, err := scanPeer(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", ErrPeerNotFound, name)
+	}
+	return peer, err
 }
 
-// Session — запись о подключении клиента из vpn_logs
-type Session struct {
-	ID             int64  `json:"id"`
-	UserID         int    `json:"user_id"`
-	Username       string `json:"username"`
-	Action         string `json:"action"`
-	IPAssigned     string `json:"ip_assigned"`
-	ConnectedAt    string `json:"connected_at"`
-	DisconnectedAt string `json:"disconnected_at,omitempty"`
+// RemovePeer deletes a peer; its address becomes available again.
+func (db *DB) RemovePeer(name string) error {
+	result, err := db.conn.Exec("DELETE FROM peers WHERE name = ?", name)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %s", ErrPeerNotFound, name)
+	}
+	return nil
 }
 
-// ListSessions возвращает последние записи подключений, начиная с самых свежих
-func (db *DB) ListSessions(limit int) ([]*Session, error) {
-	rows, err := db.conn.Query(
-		`SELECT l.id, l.user_id, COALESCE(u.username, '?'), COALESCE(l.action, ''),
-		        COALESCE(l.ip_assigned, ''), COALESCE(l.connected_at, ''),
-		        COALESCE(l.disconnected_at, '')
-		 FROM vpn_logs l
-		 LEFT JOIN users u ON u.id = l.user_id
-		 ORDER BY l.id DESC
-		 LIMIT ?`,
-		limit,
-	)
+// AWGPeers returns the peers in the form the config renderer expects.
+func (db *DB) AWGPeers() ([]awg.Peer, error) {
+	stored, err := db.ListPeers()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var sessions []*Session
-	for rows.Next() {
-		s := &Session{}
-		err := rows.Scan(&s.ID, &s.UserID, &s.Username, &s.Action,
-			&s.IPAssigned, &s.ConnectedAt, &s.DisconnectedAt)
-		if err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, s)
+	peers := make([]awg.Peer, 0, len(stored))
+	for _, p := range stored {
+		peers = append(peers, awg.Peer{
+			Name:         p.Name,
+			PrivateKey:   p.PrivateKey,
+			PublicKey:    p.PublicKey,
+			PresharedKey: p.PresharedKey,
+			Address:      p.Address,
+		})
 	}
-	return sessions, rows.Err()
+	return peers, nil
 }
 
-// StartSession записывает подключение клиента и возвращает ID записи в vpn_logs
-func (db *DB) StartSession(userID int, assignedIP string) (int64, error) {
-	result, err := db.conn.Exec(
-		`INSERT INTO vpn_logs (user_id, action, ip_assigned, connected_at)
-		 VALUES (?, 'connect', ?, CURRENT_TIMESTAMP)`,
-		userID, assignedIP,
+// scanner covers both *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPeer(src scanner) (*Peer, error) {
+	var (
+		peer                             Peer
+		private, public, preshared, addr string
 	)
+	err := src.Scan(&peer.ID, &peer.Name, &private, &public, &preshared, &addr, &peer.Created)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.LastInsertId()
+
+	if peer.PrivateKey, err = awg.ParseKey(private); err != nil {
+		return nil, fmt.Errorf("peer %q private key: %w", peer.Name, err)
+	}
+	if peer.PublicKey, err = awg.ParseKey(public); err != nil {
+		return nil, fmt.Errorf("peer %q public key: %w", peer.Name, err)
+	}
+	if peer.PresharedKey, err = awg.ParseKey(preshared); err != nil {
+		return nil, fmt.Errorf("peer %q preshared key: %w", peer.Name, err)
+	}
+	peer.Address = net.ParseIP(addr)
+	if peer.Address == nil {
+		return nil, fmt.Errorf("peer %q has an invalid address %q", peer.Name, addr)
+	}
+	return &peer, nil
 }
 
-// EndSession проставляет время отключения для ранее открытой сессии
-func (db *DB) EndSession(sessionID int64) error {
-	_, err := db.conn.Exec(
-		`UPDATE vpn_logs SET action = 'disconnect', disconnected_at = CURRENT_TIMESTAMP
-		 WHERE id = ?`,
-		sessionID,
-	)
-	return err
-}
-
-// Close закрывает подключение
 func (db *DB) Close() error {
 	return db.conn.Close()
 }

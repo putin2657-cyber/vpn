@@ -1,21 +1,22 @@
 #!/bin/bash
 set -euo pipefail
 
-PROJECT_DIR="/Users/elizavetalistopad/CLionProjects/untitled3"
-cd "$PROJECT_DIR"
+cd "$(dirname "$0")"
 
-echo "=== VPN Build ==="
-go build -o vpn-server ./cmd/server/
+echo "=== Build ==="
 go build -o vpn-admin ./cmd/admin/
 go build -o vpn-api ./cmd/api/
-go build -o vpn-client ./cmd/client-advanced/
 
-echo "✅ Build complete"
-echo ""
-echo "Mac (requires sudo for TUN):"
-echo "  Terminal 1: ./vpn-server -addr :8443 -cert server.crt -key server.key"
-echo "  Terminal 2: ./vpn-admin -action add -user alice -email alice@test.com"
-echo "  Terminal 3: sudo ./connect_mac.sh localhost:8443 <TOKEN>"
-echo ""
-echo "Test without TUN:"
-echo "  ./vpn-client -server localhost:8443 -token <TOKEN> -no-tun"
+echo "=== Test ==="
+go test ./... -count=1
+
+echo
+echo "✅ Build and tests complete"
+echo
+echo "First run:"
+echo "  ./vpn-admin -action init -endpoint vpn.example.com:51820 -interface eth0"
+echo "  ./vpn-admin -action add -name alice-phone"
+echo "  ./vpn-admin -action qr -name alice-phone"
+echo
+echo "Deploy to the server:"
+echo "  ./vpn-admin -action server-config -out awg0.conf"
