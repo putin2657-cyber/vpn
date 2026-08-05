@@ -1,0 +1,35 @@
+# Compiled binaries
+/vpn-server
+/vpn-client
+/vpn-admin
+/vpn-api
+
+# Runtime data
+*.db
+*.db-wal
+*.db-shm
+
+# TLS private key
+server.key
+
+# Node / Electron
+desktop/node_modules/
+desktop/build/
+desktop/dist/
+
+# Android
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+
+# Xcode
+mobile/ios/**/xcuserdata/
+mobile/ios/**/*.xcworkspace/xcshareddata/
+
+# CLion / IDE
+/cmake-build-debug/
+.idea/
+
+# macOS
+.DS_Store
