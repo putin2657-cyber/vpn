@@ -9,9 +9,9 @@ import (
 // DefaultListenPort is AmneziaWG's usual UDP port.
 const DefaultListenPort = 51820
 
-// DefaultMTU leaves room for the UDP, IP and AmneziaWG headers on a 1500-byte
-// path, so tunnelled packets are not fragmented.
-const DefaultMTU = 1420
+// DefaultMTU stays under common mobile and CGNAT ceilings. 1420 still
+// fragments on some LTE paths; 1280 is the safe floor that IPv6 also requires.
+const DefaultMTU = 1280
 
 // Server describes the interface running on the VPS.
 type Server struct {
@@ -84,12 +84,20 @@ func (s *Server) ServerConfig(peers []Peer) (string, error) {
 
 	// Masquerading is what actually gives clients the internet; forwarding
 	// rules let packets cross between the tunnel and the outside world.
+	// awg0→awg0 covers peer-to-peer; the extra MASQUERADE for traffic that
+	// hairpins back to our public address is what Telegram P2P needs when
+	// two phones share one exit IP.
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.ip_forward=1\n")
+	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.conf.all.rp_filter=2\n")
 	fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n", s.Subnet, nic)
+	fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -d %s -j MASQUERADE\n", s.Subnet, s.Subnet)
+	fmt.Fprintf(&b, "PostUp = iptables -A FORWARD -i %%i -o %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostUp = iptables -A FORWARD -i %%i -o %s -j ACCEPT\n", nic)
 	fmt.Fprintf(&b, "PostUp = iptables -A FORWARD -i %s -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n", nic)
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", s.Subnet, nic)
+	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -d %s -j MASQUERADE\n", s.Subnet, s.Subnet)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT\n", nic)
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n", nic)
 

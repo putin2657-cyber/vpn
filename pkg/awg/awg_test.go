@@ -249,7 +249,7 @@ func TestClientConfigRoutesEverythingThroughTheTunnel(t *testing.T) {
 		"PrivateKey = " + peer.PrivateKey.String(),
 		"Address = 10.8.0.2/32",
 		"DNS = 1.1.1.1, 1.0.0.1",
-		"MTU = 1420",
+		"MTU = 1280",
 		"PublicKey = " + server.PublicKey.String(),
 		"Endpoint = vpn.example.com:51820",
 		"AllowedIPs = 0.0.0.0/0",
