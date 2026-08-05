@@ -211,6 +211,33 @@ func TestServerDropsSpoofedSourceAddress(t *testing.T) {
 	}
 }
 
+// Internet-bound traffic belongs on the server's TUN, never on a peer's
+// connection. With egress off there is no TUN, so the packet is simply dropped.
+func TestInternetBoundTrafficIsNotSentToPeers(t *testing.T) {
+	addr := startTestServer(t)
+
+	alice := dialClient(t, addr, addTestUser(t, "alice"))
+	bob := dialClient(t, addr, addTestUser(t, "bob"))
+
+	external := ipv4Packet(alice.ip, net.ParseIP("8.8.8.8"), "to-the-internet")
+	if err := protocol.WritePacket(alice.conn, external); err != nil {
+		t.Fatalf("WritePacket(external): %v", err)
+	}
+
+	legit := ipv4Packet(alice.ip, bob.ip, "to-bob")
+	if err := protocol.WritePacket(alice.conn, legit); err != nil {
+		t.Fatalf("WritePacket(legit): %v", err)
+	}
+
+	got := bob.readPacket(t)
+	if bytes.Equal(got, external) {
+		t.Fatal("internet-bound packet was delivered to another client")
+	}
+	if !bytes.Equal(got, legit) {
+		t.Fatalf("bob received %v, want %v", got, legit)
+	}
+}
+
 func TestKeepaliveDoesNotDisturbTheStream(t *testing.T) {
 	addr := startTestServer(t)
 

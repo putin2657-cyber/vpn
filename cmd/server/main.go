@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"vpn-server/pkg/db"
+	"vpn-server/pkg/nat"
 	"vpn-server/pkg/protocol"
 	"vpn-server/pkg/routing"
+	"vpn-server/pkg/tun"
 )
 
 var (
@@ -23,6 +25,7 @@ var (
 	certPem = flag.String("cert", "server.crt", "TLS certificate file")
 	keyPem  = flag.String("key", "server.key", "TLS key file")
 	dbPath  = flag.String("db", "vpn.db", "SQLite database path")
+	egress  = flag.Bool("egress", true, "route client traffic to the internet (needs root)")
 )
 
 const (
@@ -70,11 +73,19 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+// The server holds the first host address and acts as the clients' gateway.
 var (
-	ipPool   = &ipAllocator{base: net.ParseIP("10.8.0.0"), next: ipPoolFirst}
-	router   = routing.NewRoutingTable()
-	database *db.DB
-	sessions sync.WaitGroup
+	vpnSubnet  = &net.IPNet{IP: net.IPv4(10, 8, 0, 0), Mask: net.CIDRMask(24, 32)}
+	gatewayIP  = net.IPv4(10, 8, 0, 1)
+	dnsServers = []string{"1.1.1.1", "1.0.0.1"}
+)
+
+var (
+	ipPool    = &ipAllocator{base: net.ParseIP("10.8.0.0"), next: ipPoolFirst}
+	router    = routing.NewRoutingTable()
+	database  *db.DB
+	sessions  sync.WaitGroup
+	serverTUN *tun.Device
 )
 
 func main() {
@@ -87,6 +98,17 @@ func main() {
 		log.Fatalf("failed to open database: %v", err)
 	}
 	defer database.Close()
+
+	if *egress {
+		stopEgress, err := setupEgress()
+		if err != nil {
+			log.Fatalf("failed to set up internet egress: %v\n"+
+				"Run as root, or pass -egress=false to serve the VPN subnet only.", err)
+		}
+		defer stopEgress()
+	} else {
+		log.Println("egress disabled: clients can reach each other but not the internet")
+	}
 
 	cert, err := tls.LoadX509KeyPair(*certPem, *keyPem)
 	if err != nil {
@@ -113,6 +135,52 @@ func main() {
 	go awaitShutdown(ln)
 
 	acceptLoop(ln)
+}
+
+// setupEgress opens the server's own TUN interface and puts NAT in front of
+// it, which is what lets client traffic reach the internet at all.
+func setupEgress() (func(), error) {
+	dev, err := tun.Open(gatewayIP, vpnSubnet.Mask)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanupNAT, err := nat.Enable(vpnSubnet, dev.Name())
+	if err != nil {
+		dev.Close()
+		return nil, err
+	}
+
+	serverTUN = dev
+	go readFromTUN(dev)
+	log.Printf("egress ready: %s on %s, MTU %d", gatewayIP, dev.Name(), dev.MTU())
+
+	return func() {
+		cleanupNAT()
+		dev.Close()
+	}, nil
+}
+
+// readFromTUN delivers replies coming back from the internet to whichever
+// client owns the destination address.
+func readFromTUN(dev *tun.Device) {
+	for {
+		pkt, err := dev.Read()
+		if err != nil {
+			log.Printf("TUN read error: %v", err)
+			return
+		}
+
+		destIP, ok := protocol.DestIP(pkt)
+		if !ok {
+			continue
+		}
+		if target := router.Lookup(destIP); target != nil {
+			if err := target.WritePacket(pkt); err != nil {
+				log.Printf("deliver packet to %s failed: %v", destIP, err)
+			}
+		}
+	}
 }
 
 func acceptLoop(ln net.Listener) {
@@ -261,12 +329,25 @@ func (c *Client) forward() {
 		if !ok {
 			continue
 		}
-		target := router.Lookup(destIP)
-		if target == nil {
+
+		// Traffic between clients never leaves the process; anything else goes
+		// out through the server's TUN and gets masqueraded on the way.
+		if vpnSubnet.Contains(destIP) {
+			target := router.Lookup(destIP)
+			if target == nil {
+				continue
+			}
+			if err := target.WritePacket(pkt); err != nil {
+				log.Printf("forward packet to %s failed: %v", destIP, err)
+			}
 			continue
 		}
-		if err := target.WritePacket(pkt); err != nil {
-			log.Printf("forward packet to %s failed: %v", destIP, err)
+
+		if serverTUN == nil {
+			continue
+		}
+		if _, err := serverTUN.Write(pkt); err != nil {
+			log.Printf("egress write to %s failed: %v", destIP, err)
 		}
 	}
 }
