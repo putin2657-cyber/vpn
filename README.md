@@ -110,8 +110,13 @@ Files are in `mobile/ios/`.
 
 Project: `mobile/android/`
 
+There is no Gradle wrapper checked in, so the simplest route is to open
+`mobile/android` in Android Studio and let it generate the wrapper and fetch the
+SDK. From a shell you would need a JDK, the Android SDK, and:
+
 ```bash
 cd mobile/android
+gradle wrapper        # once, to create ./gradlew
 ./gradlew assembleDebug
 ```
 
