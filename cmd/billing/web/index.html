@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Семейный VPN</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a222c;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --warn: #f0b429;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1c3a5a 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    main {
+      width: min(440px, 100%);
+      background: var(--card);
+      border: 1px solid #2a3542;
+      border-radius: 18px;
+      padding: 28px 24px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.35);
+    }
+    h1 { font-size: 1.35rem; margin: 0 0 8px; }
+    p { color: var(--muted); line-height: 1.45; margin: 0 0 16px; }
+    .price {
+      font-size: 2rem;
+      font-weight: 700;
+      margin: 8px 0 4px;
+    }
+    .price span { font-size: 1rem; color: var(--muted); font-weight: 500; }
+    .row { display: flex; justify-content: space-between; gap: 12px; margin: 10px 0; font-size: .95rem; }
+    .row b { color: var(--text); }
+    .status { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: .8rem; background: #243040; }
+    .status.active { color: var(--ok); }
+    .status.past_due, .status.invited { color: var(--warn); }
+    button, .btn {
+      display: block;
+      width: 100%;
+      margin-top: 20px;
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #041018;
+      background: linear-gradient(180deg, #6cbcff, var(--accent));
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+    }
+    button:disabled { opacity: .6; cursor: wait; }
+    .note { margin-top: 16px; font-size: .8rem; }
+    .err { color: #ff8b8b; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Семейный VPN</h1>
+    <p>Оплата символическая — на карту админа через ЮKassa. Карта сохраняется для автопродления.</p>
+    <div class="price">120 ₽ <span>/ месяц</span></div>
+    <div class="row"><span>Участник</span><b id="name">—</b></div>
+    <div class="row"><span>Устройство</span><b id="peer">—</b></div>
+    <div class="row"><span>Статус</span><span class="status" id="status">—</span></div>
+    <div class="row"><span>Оплачено до</span><b id="until">—</b></div>
+    <button id="pay" type="button">Оплатить и включить автопродление</button>
+    <p class="note">После оплаты доступ продлевается на 30 дней. Если списание не пройдёт, есть 3 дня льготы, потом VPN на этом устройстве отключится.</p>
+    <p class="err" id="err" hidden></p>
+  </main>
+  <script>
+    const token = location.pathname.split('/').filter(Boolean).pop();
+    const statusEl = document.getElementById('status');
+    const errEl = document.getElementById('err');
+    const payBtn = document.getElementById('pay');
+
+    function fmtDate(v) {
+      if (!v) return 'ещё не оплачено';
+      const d = new Date(v);
+      if (Number.isNaN(d.getTime())) return v;
+      return d.toLocaleDateString('ru-RU');
+    }
+
+    async function load() {
+      const res = await fetch('/api/i/' + token);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'не найдено');
+      document.getElementById('name').textContent = body.display_name;
+      document.getElementById('peer').textContent = body.peer_name;
+      statusEl.textContent = body.status;
+      statusEl.className = 'status ' + body.status;
+      document.getElementById('until').textContent = fmtDate(body.paid_until);
+      if (body.status === 'active' && body.payment_method_saved) {
+        payBtn.textContent = 'Продлить сейчас';
+      }
+    }
+
+    payBtn.addEventListener('click', async () => {
+      errEl.hidden = true;
+      payBtn.disabled = true;
+      try {
+        const res = await fetch('/api/i/' + token + '/pay', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || 'ошибка оплаты');
+        location.href = body.confirmation_url;
+      } catch (e) {
+        errEl.hidden = false;
+        errEl.textContent = e.message;
+        payBtn.disabled = false;
+      }
+    });
+
+    load().catch((e) => {
+      errEl.hidden = false;
+      errEl.textContent = e.message;
+      payBtn.disabled = true;
+    });
+  </script>
+</body>
+</html>

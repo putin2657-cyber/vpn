@@ -116,7 +116,14 @@ func (s *Server) ServerConfig(peers []Peer) (string, error) {
 }
 
 // ClientConfig renders the file a user imports into their AmneziaWG client.
-func (s *Server) ClientConfig(peer Peer) (string, error) {
+// mode defaults to TunnelSmart when empty.
+func (s *Server) ClientConfig(peer Peer, mode TunnelMode) (string, error) {
+	if mode == "" {
+		mode = DefaultTunnelMode
+	}
+	if mode != TunnelSmart && mode != TunnelFull {
+		return "", fmt.Errorf("unknown tunnel mode %q", mode)
+	}
 	if err := s.Validate(); err != nil {
 		return "", err
 	}
@@ -145,13 +152,20 @@ func (s *Server) ClientConfig(peer Peer) (string, error) {
 		fmt.Fprintf(&b, "PresharedKey = %s\n", peer.PresharedKey)
 	}
 	fmt.Fprintf(&b, "Endpoint = %s\n", s.Endpoint)
-	// Capture IPv4 and IPv6. Without ::/0, phones keep a native IPv6 path and
-	// apps like Telegram happily send calls around the tunnel.
-	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", s.clientAllowedIPs(mode))
 	// Keeps NAT mappings on mobile networks from expiring.
 	b.WriteString("PersistentKeepalive = 25\n")
 
 	return b.String(), nil
+}
+
+func (s *Server) clientAllowedIPs(mode TunnelMode) string {
+	if mode == TunnelFull {
+		// Capture IPv4 and IPv6. Without ::/0, phones keep a native IPv6 path
+		// and apps like Telegram happily send calls around the tunnel.
+		return "0.0.0.0/0, ::/0"
+	}
+	return strings.Join(SmartAllowedIPs(s.DNS), ", ")
 }
 
 func (s *Server) listenPort() int {

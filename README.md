@@ -60,6 +60,11 @@ Add a peer per device, not per person — each one needs its own address:
 
 ## Hand configs to people
 
+By default clients get **smart** split tunneling: only curated foreign services
+(YouTube/Google, Instagram/WhatsApp, Discord, X, Reddit, Twitch, Netflix, plus
+the VPN DNS servers) go through the VPS. Yandex, Gosuslugi, banks and other
+local apps keep the ISP address — nobody has to tweak Amnezia per device.
+
 Print a config to paste into a desktop client:
 
 ```bash
@@ -71,6 +76,17 @@ Or show a QR code, which is how the phone apps import a tunnel:
 ```bash
 ./vpn-admin -action qr -name alice-phone
 ```
+
+For a classic full-tunnel profile (everything via the VPS):
+
+```bash
+./vpn-admin -action config -name alice-laptop -mode full
+./vpn-admin -action qr -name alice-phone -mode full
+```
+
+If a site you need is still on the Russian IP, either use `-mode full` for that
+person or extend the allowlist in `pkg/awg/smart_routes.go` and re-export their
+config.
 
 Configs contain the peer's private key. Send them over something private.
 
@@ -104,9 +120,13 @@ ssh root@your-vps 'systemctl restart awg-quick@awg0'
 Install the Amnezia app on each device, import the config or scan the QR code.
 The apps handle reconnection, sleep and network changes themselves.
 
-Confirm it works by checking your address changes:
+With the default smart profile, `curl` to a random site still shows your ISP IP.
+Check a tunneled destination instead (or export `-mode full` once to verify the
+exit address):
 
 ```bash
+./vpn-admin -action config -name alice-phone -mode full -out /tmp/full.conf
+# import /tmp/full.conf, then:
 curl -s https://api.ipify.org
 ```
 
@@ -122,15 +142,48 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/peers
 
 Without `-token` one is generated and printed at startup.
 
+## Family billing (120 ₽ / month)
+
+A small portal on the same VPS takes a symbolic **120 RUB** subscription through
+[YooKassa](https://yookassa.ru/), saves the card, and auto-renews every 30 days.
+If renewal fails there is a **3-day grace**, then that peer is dropped from
+`awg0.conf` until they pay again.
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o vpn-billing ./cmd/billing
+GOOS=linux GOARCH=amd64 go build -o vpn-admin ./cmd/admin
+scp vpn-billing vpn-admin vpn.db deploy/sync-awg.sh deploy/vpn-billing.service \
+  deploy/billing.env.example deploy/install-billing.sh root@YOUR_VPS:/tmp/
+ssh root@YOUR_VPS 'bash /tmp/install-billing.sh'
+```
+
+Edit `/opt/vpn/billing.env` with your YooKassa shop id and secret, enable the
+unit, and point the YooKassa HTTP notifications to
+`https://<host>/webhook/yookassa`.
+
+Invite each relative (one peer = one payer). These peers are reserved for the
+admin and **cannot** be billed: `my-phone`, `my-second`, `device-03`,
+`device-06`. Use the free ones instead, for example `device-04` … `device-05`,
+`device-07` … `device-10`:
+
+```bash
+ssh root@YOUR_VPS '/opt/vpn/vpn-billing -action invite -name Mama -peer device-04'
+```
+
+Send them the invite link. Owner peers stay online without a subscription.
+
 ## Layout
 
 | Path | Description |
 |------|-------------|
 | `pkg/awg` | Keys, obfuscation parameters, config rendering |
-| `pkg/db` | Server identity and peers in SQLite |
+| `pkg/billing` | 120 ₽ subscriptions, renewals, peer sync |
+| `pkg/yookassa` | YooKassa Payments API client |
+| `pkg/db` | Server identity, peers and members in SQLite |
 | `cmd/admin` | Command line management |
+| `cmd/billing` | Family payment portal |
 | `cmd/api` | HTTP API for the desktop panel |
-| `deploy` | VPS installation script |
+| `deploy` | VPS installation and billing units |
 | `desktop` | Electron admin panel |
 
 ## Notes

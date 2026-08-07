@@ -33,6 +33,7 @@ type Peer struct {
 	PublicKey    awg.Key
 	PresharedKey awg.Key
 	Address      net.IP
+	Enabled      bool
 	Created      string
 }
 
@@ -46,7 +47,7 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	// The admin CLI and the API may both hold the file open.
-	if _, err := conn.Exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;"); err != nil {
+	if _, err := conn.Exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;"); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -85,10 +86,64 @@ func (db *DB) init() error {
 		public_key    TEXT UNIQUE NOT NULL,
 		preshared_key TEXT NOT NULL,
 		address       TEXT UNIQUE NOT NULL,
+		enabled       INTEGER NOT NULL DEFAULT 1,
 		created       DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+	CREATE TABLE IF NOT EXISTS members (
+		id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+		display_name       TEXT NOT NULL,
+		peer_name          TEXT NOT NULL UNIQUE,
+		token              TEXT NOT NULL UNIQUE,
+		payment_method_id  TEXT NOT NULL DEFAULT '',
+		status             TEXT NOT NULL DEFAULT 'invited',
+		paid_until         TEXT NOT NULL DEFAULT '',
+		created            DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(peer_name) REFERENCES peers(name) ON DELETE CASCADE
+	);
+	CREATE TABLE IF NOT EXISTS payments (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		member_id     INTEGER NOT NULL,
+		yk_payment_id TEXT NOT NULL UNIQUE,
+		amount_value  TEXT NOT NULL,
+		status        TEXT NOT NULL,
+		kind          TEXT NOT NULL,
+		created       DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE
+	);
 	`
-	_, err := db.conn.Exec(schema)
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+	return db.ensurePeerEnabledColumn()
+}
+
+func (db *DB) ensurePeerEnabledColumn() error {
+	rows, err := db.conn.Query(`PRAGMA table_info(peers)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasEnabled := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "enabled" {
+			hasEnabled = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasEnabled {
+		return nil
+	}
+	_, err = db.conn.Exec(`ALTER TABLE peers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
 	return err
 }
 
@@ -208,8 +263,8 @@ func (db *DB) AddPeer(name string) (*Peer, error) {
 	}
 
 	result, err := db.conn.Exec(`
-		INSERT INTO peers (name, private_key, public_key, preshared_key, address)
-		VALUES (?, ?, ?, ?, ?)`,
+		INSERT INTO peers (name, private_key, public_key, preshared_key, address, enabled)
+		VALUES (?, ?, ?, ?, ?, 1)`,
 		name, keys.Private.String(), keys.Public.String(),
 		preshared.String(), address.String(),
 	)
@@ -228,6 +283,7 @@ func (db *DB) AddPeer(name string) (*Peer, error) {
 		PublicKey:    keys.Public,
 		PresharedKey: preshared,
 		Address:      address,
+		Enabled:      true,
 	}, nil
 }
 
@@ -285,7 +341,7 @@ func addOffset(ip net.IP, offset int) error {
 
 func (db *DB) ListPeers() ([]*Peer, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, name, private_key, public_key, preshared_key, address, created
+		SELECT id, name, private_key, public_key, preshared_key, address, enabled, created
 		FROM peers ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -305,7 +361,7 @@ func (db *DB) ListPeers() ([]*Peer, error) {
 
 func (db *DB) GetPeer(name string) (*Peer, error) {
 	row := db.conn.QueryRow(`
-		SELECT id, name, private_key, public_key, preshared_key, address, created
+		SELECT id, name, private_key, public_key, preshared_key, address, enabled, created
 		FROM peers WHERE name = ?`, name)
 
 	peer, err := scanPeer(row)
@@ -313,6 +369,26 @@ func (db *DB) GetPeer(name string) (*Peer, error) {
 		return nil, fmt.Errorf("%w: %s", ErrPeerNotFound, name)
 	}
 	return peer, err
+}
+
+// SetPeerEnabled toggles whether a peer is written into awg0.conf.
+func (db *DB) SetPeerEnabled(name string, enabled bool) error {
+	flag := 0
+	if enabled {
+		flag = 1
+	}
+	result, err := db.conn.Exec(`UPDATE peers SET enabled = ? WHERE name = ?`, flag, name)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %s", ErrPeerNotFound, name)
+	}
+	return nil
 }
 
 // RemovePeer deletes a peer; its address becomes available again.
@@ -331,7 +407,8 @@ func (db *DB) RemovePeer(name string) error {
 	return nil
 }
 
-// AWGPeers returns the peers in the form the config renderer expects.
+// AWGPeers returns enabled peers in the form the config renderer expects.
+// Disabled (unpaid) peers are omitted so they cannot handshake.
 func (db *DB) AWGPeers() ([]awg.Peer, error) {
 	stored, err := db.ListPeers()
 	if err != nil {
@@ -340,6 +417,9 @@ func (db *DB) AWGPeers() ([]awg.Peer, error) {
 
 	peers := make([]awg.Peer, 0, len(stored))
 	for _, p := range stored {
+		if !p.Enabled {
+			continue
+		}
 		peers = append(peers, awg.Peer{
 			Name:         p.Name,
 			PrivateKey:   p.PrivateKey,
@@ -360,8 +440,9 @@ func scanPeer(src scanner) (*Peer, error) {
 	var (
 		peer                             Peer
 		private, public, preshared, addr string
+		enabled                          int
 	)
-	err := src.Scan(&peer.ID, &peer.Name, &private, &public, &preshared, &addr, &peer.Created)
+	err := src.Scan(&peer.ID, &peer.Name, &private, &public, &preshared, &addr, &enabled, &peer.Created)
 	if err != nil {
 		return nil, err
 	}
@@ -379,6 +460,7 @@ func scanPeer(src scanner) (*Peer, error) {
 	if peer.Address == nil {
 		return nil, fmt.Errorf("peer %q has an invalid address %q", peer.Name, addr)
 	}
+	peer.Enabled = enabled != 0
 	return &peer, nil
 }
 

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Оплата VPN</title>
+  <style>
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      font-family: "Segoe UI", system-ui, sans-serif; background: #0f1419; color: #e8eef4;
+      padding: 24px;
+    }
+    main {
+      width: min(440px, 100%); background: #1a222c; border: 1px solid #2a3542;
+      border-radius: 18px; padding: 28px 24px; text-align: center;
+    }
+    a { color: #6cbcff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Спасибо</h1>
+    <p>Если оплата прошла, доступ обновится в течение минуты. Можно вернуться на страницу статуса.</p>
+    <p><a id="back" href="#">Открыть статус</a></p>
+  </main>
+  <script>
+    const parts = location.pathname.split('/').filter(Boolean);
+    // /i/{token}/done
+    const token = parts[1];
+    document.getElementById('back').href = '/i/' + token;
+  </script>
+</body>
+</html>

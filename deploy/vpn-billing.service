@@ -1,0 +1,15 @@
+[Unit]
+Description=Family VPN billing portal (YooKassa)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vpn
+EnvironmentFile=/opt/vpn/billing.env
+ExecStart=/opt/vpn/vpn-billing -action serve -db /opt/vpn/vpn.db
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
