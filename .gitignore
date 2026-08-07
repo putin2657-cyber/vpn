@@ -3,6 +3,7 @@
 /vpn-client
 /vpn-admin
 /vpn-api
+/vpn-billing
 
 # Runtime data
 *.db

@@ -179,10 +179,14 @@ func listPeers(database *db.DB) error {
 		return nil
 	}
 
-	fmt.Printf("%-4s %-24s %-14s %-20s\n", "ID", "Name", "Address", "Created")
-	fmt.Println(strings.Repeat("-", 66))
+	fmt.Printf("%-4s %-24s %-14s %-8s %-20s\n", "ID", "Name", "Address", "Enabled", "Created")
+	fmt.Println(strings.Repeat("-", 76))
 	for _, peer := range peers {
-		fmt.Printf("%-4d %-24s %-14s %-20s\n", peer.ID, peer.Name, peer.Address, peer.Created)
+		enabled := "yes"
+		if !peer.Enabled {
+			enabled = "no"
+		}
+		fmt.Printf("%-4d %-24s %-14s %-8s %-20s\n", peer.ID, peer.Name, peer.Address, enabled, peer.Created)
 	}
 	return nil
 }

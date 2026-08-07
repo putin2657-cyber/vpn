@@ -142,15 +142,46 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/peers
 
 Without `-token` one is generated and printed at startup.
 
+## Family billing (120 ₽ / month)
+
+A small portal on the same VPS takes a symbolic **120 RUB** subscription through
+[YooKassa](https://yookassa.ru/), saves the card, and auto-renews every 30 days.
+If renewal fails there is a **3-day grace**, then that peer is dropped from
+`awg0.conf` until they pay again.
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o vpn-billing ./cmd/billing
+GOOS=linux GOARCH=amd64 go build -o vpn-admin ./cmd/admin
+scp vpn-billing vpn-admin vpn.db deploy/sync-awg.sh deploy/vpn-billing.service \
+  deploy/billing.env.example deploy/install-billing.sh root@YOUR_VPS:/tmp/
+ssh root@YOUR_VPS 'bash /tmp/install-billing.sh'
+```
+
+Edit `/opt/vpn/billing.env` with your YooKassa shop id and secret, enable the
+unit, and point the YooKassa HTTP notifications to
+`https://<host>/webhook/yookassa`.
+
+Invite each relative (one peer = one payer):
+
+```bash
+ssh root@YOUR_VPS '/opt/vpn/vpn-billing -action invite -name Mama -peer device-03'
+```
+
+Send them the invite link. Your own devices can stay unbound to billing and
+keep working without a subscription.
+
 ## Layout
 
 | Path | Description |
 |------|-------------|
 | `pkg/awg` | Keys, obfuscation parameters, config rendering |
-| `pkg/db` | Server identity and peers in SQLite |
+| `pkg/billing` | 120 ₽ subscriptions, renewals, peer sync |
+| `pkg/yookassa` | YooKassa Payments API client |
+| `pkg/db` | Server identity, peers and members in SQLite |
 | `cmd/admin` | Command line management |
+| `cmd/billing` | Family payment portal |
 | `cmd/api` | HTTP API for the desktop panel |
-| `deploy` | VPS installation script |
+| `deploy` | VPS installation and billing units |
 | `desktop` | Electron admin panel |
 
 ## Notes
