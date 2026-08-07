@@ -24,6 +24,8 @@ import (
 var webFS embed.FS
 
 func main() {
+	loadEnvFile(envOr("BILLING_ENV_FILE", "/opt/vpn/billing.env"))
+
 	action := flag.String("action", "serve", "serve | invite | list | maintenance")
 	dbPath := flag.String("db", envOr("BILLING_DB", "vpn.db"), "path to vpn.db")
 	name := flag.String("name", "", "display name for invite")
@@ -265,4 +267,27 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadEnvFile applies KEY=VALUE lines without overriding variables already set.
+func loadEnvFile(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if os.Getenv(key) != "" {
+			continue
+		}
+		_ = os.Setenv(key, strings.TrimSpace(value))
+	}
 }

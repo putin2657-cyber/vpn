@@ -24,6 +24,21 @@ const (
 	RenewAhead = 24 * time.Hour
 )
 
+// OwnerPeers are the admin's own devices. They stay free of billing forever:
+// no invite, no auto-disable for non-payment.
+var OwnerPeers = map[string]struct{}{
+	"my-phone":  {}, // 1st
+	"my-second": {}, // 2nd
+	"device-03": {}, // 3rd
+	"device-06": {}, // 6th
+}
+
+// IsOwnerPeer reports whether this peer is reserved for the admin.
+func IsOwnerPeer(name string) bool {
+	_, ok := OwnerPeers[strings.TrimSpace(name)]
+	return ok
+}
+
 // Config is loaded from the environment on the VPS.
 type Config struct {
 	DatabasePath string
@@ -43,6 +58,10 @@ type Service struct {
 }
 
 func (s *Service) Invite(displayName, peerName string) (*db.Member, string, error) {
+	peerName = strings.TrimSpace(peerName)
+	if IsOwnerPeer(peerName) {
+		return nil, "", fmt.Errorf("peer %q is reserved for the admin and cannot be billed", peerName)
+	}
 	member, err := s.DB.CreateMember(displayName, peerName)
 	if err != nil {
 		return nil, "", err
@@ -148,6 +167,9 @@ func (s *Service) RunMaintenance() error {
 	changed := false
 	for _, member := range past {
 		if member.Status == db.MemberCanceled {
+			continue
+		}
+		if IsOwnerPeer(member.PeerName) {
 			continue
 		}
 		peer, err := s.DB.GetPeer(member.PeerName)

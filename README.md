@@ -161,14 +161,16 @@ Edit `/opt/vpn/billing.env` with your YooKassa shop id and secret, enable the
 unit, and point the YooKassa HTTP notifications to
 `https://<host>/webhook/yookassa`.
 
-Invite each relative (one peer = one payer):
+Invite each relative (one peer = one payer). These peers are reserved for the
+admin and **cannot** be billed: `my-phone`, `my-second`, `device-03`,
+`device-06`. Use the free ones instead, for example `device-04` … `device-05`,
+`device-07` … `device-10`:
 
 ```bash
-ssh root@YOUR_VPS '/opt/vpn/vpn-billing -action invite -name Mama -peer device-03'
+ssh root@YOUR_VPS '/opt/vpn/vpn-billing -action invite -name Mama -peer device-04'
 ```
 
-Send them the invite link. Your own devices can stay unbound to billing and
-keep working without a subscription.
+Send them the invite link. Owner peers stay online without a subscription.
 
 ## Layout
 
