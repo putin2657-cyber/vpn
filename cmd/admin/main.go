@@ -29,7 +29,9 @@ var (
 	dns      = flag.String("dns", "1.1.1.1,1.0.0.1", "DNS servers handed to clients (init)")
 	port     = flag.Int("port", awg.DefaultListenPort, "UDP port the server listens on (init)")
 	mtu      = flag.Int("mtu", awg.DefaultMTU, "tunnel MTU (init)")
-	out      = flag.String("out", "", "write the config to this file instead of stdout")
+	mode     = flag.String("mode", string(awg.DefaultTunnelMode),
+		"client tunnel mode for add/config/qr: smart (default) or full")
+	out = flag.String("out", "", "write the config to this file instead of stdout")
 )
 
 func main() {
@@ -138,6 +140,11 @@ func addPeer(database *db.DB) error {
 		return fmt.Errorf("-name is required")
 	}
 
+	tunnelMode, err := awg.ParseTunnelMode(*mode)
+	if err != nil {
+		return err
+	}
+
 	peer, err := database.AddPeer(*name)
 	if err != nil {
 		return err
@@ -147,12 +154,12 @@ func addPeer(database *db.DB) error {
 		return err
 	}
 
-	config, err := server.ClientConfig(toAWGPeer(peer))
+	config, err := server.ClientConfig(toAWGPeer(peer), tunnelMode)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Peer %q added with address %s\n\n", peer.Name, peer.Address)
+	fmt.Printf("Peer %q added with address %s (mode %s)\n\n", peer.Name, peer.Address, tunnelMode)
 	if err := emit(config); err != nil {
 		return err
 	}
@@ -196,11 +203,15 @@ func removePeer(database *db.DB) error {
 }
 
 func showConfig(database *db.DB) error {
+	tunnelMode, err := awg.ParseTunnelMode(*mode)
+	if err != nil {
+		return err
+	}
 	server, peer, err := load(database)
 	if err != nil {
 		return err
 	}
-	config, err := server.ClientConfig(peer)
+	config, err := server.ClientConfig(peer, tunnelMode)
 	if err != nil {
 		return err
 	}
@@ -209,20 +220,24 @@ func showConfig(database *db.DB) error {
 
 // showQR prints the config as a QR code, which is how the mobile apps import it.
 func showQR(database *db.DB) error {
+	tunnelMode, err := awg.ParseTunnelMode(*mode)
+	if err != nil {
+		return err
+	}
 	server, peer, err := load(database)
 	if err != nil {
 		return err
 	}
-	config, err := server.ClientConfig(peer)
+	config, err := server.ClientConfig(peer, tunnelMode)
 	if err != nil {
 		return err
 	}
 
 	code, err := qrcode.New(config, qrcode.Medium)
 	if err != nil {
-		return fmt.Errorf("build QR code: %w", err)
+		return fmt.Errorf("build QR code: %w (config may be too large; use -action config -out peer.conf instead)", err)
 	}
-	fmt.Printf("Scan with the Amnezia app to add %q:\n\n", *name)
+	fmt.Printf("Scan with the Amnezia app to add %q (%s):\n\n", *name, tunnelMode)
 	fmt.Println(code.ToSmallString(false))
 	return nil
 }

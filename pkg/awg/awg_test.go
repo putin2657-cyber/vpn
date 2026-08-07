@@ -237,10 +237,10 @@ func TestServerConfigContainsPeersAndNAT(t *testing.T) {
 	}
 }
 
-func TestClientConfigRoutesEverythingThroughTheTunnel(t *testing.T) {
+func TestClientConfigFullModeRoutesEverything(t *testing.T) {
 	server, peer := testServer(t)
 
-	config, err := server.ClientConfig(peer)
+	config, err := server.ClientConfig(peer, TunnelFull)
 	if err != nil {
 		t.Fatalf("ClientConfig: %v", err)
 	}
@@ -261,6 +261,46 @@ func TestClientConfigRoutesEverythingThroughTheTunnel(t *testing.T) {
 	}
 }
 
+func TestClientConfigSmartModeKeepsLocalServicesDirect(t *testing.T) {
+	server, peer := testServer(t)
+
+	config, err := server.ClientConfig(peer, TunnelSmart)
+	if err != nil {
+		t.Fatalf("ClientConfig: %v", err)
+	}
+
+	if strings.Contains(config, "0.0.0.0/0") || strings.Contains(config, "::/0") {
+		t.Fatal("smart mode must not capture the whole internet")
+	}
+	mustContain(t, config, []string{
+		"1.1.1.1/32",
+		"1.0.0.1/32",
+		"142.250.0.0/15",
+		"157.240.0.0/16",
+		"PersistentKeepalive = 25",
+	})
+}
+
+func TestSmartRoutesAreValidCIDRs(t *testing.T) {
+	if err := ValidateSmartRoutes(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseTunnelMode(t *testing.T) {
+	smart, err := ParseTunnelMode("")
+	if err != nil || smart != TunnelSmart {
+		t.Fatalf("empty mode: got %q, %v", smart, err)
+	}
+	full, err := ParseTunnelMode("full")
+	if err != nil || full != TunnelFull {
+		t.Fatalf("full mode: got %q, %v", full, err)
+	}
+	if _, err := ParseTunnelMode("bogus"); err == nil {
+		t.Fatal("expected error for unknown mode")
+	}
+}
+
 // Both ends must agree on every obfuscation value or the handshake fails.
 func TestObfuscationMatchesOnBothSides(t *testing.T) {
 	server, peer := testServer(t)
@@ -269,7 +309,7 @@ func TestObfuscationMatchesOnBothSides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServerConfig: %v", err)
 	}
-	clientConfig, err := server.ClientConfig(peer)
+	clientConfig, err := server.ClientConfig(peer, TunnelSmart)
 	if err != nil {
 		t.Fatalf("ClientConfig: %v", err)
 	}

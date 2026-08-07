@@ -155,6 +155,12 @@ func handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tunnelMode, err := requestTunnelMode(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	peer, err := database.AddPeer(request.Name)
 	if err != nil {
 		fail(w, err)
@@ -171,7 +177,7 @@ func handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		PublicKey:    peer.PublicKey,
 		PresharedKey: peer.PresharedKey,
 		Address:      peer.Address,
-	})
+	}, tunnelMode)
 	if err != nil {
 		fail(w, err)
 		return
@@ -180,6 +186,7 @@ func handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response{Success: true, Data: map[string]any{
 		"name":    peer.Name,
 		"address": peer.Address.String(),
+		"mode":    tunnelMode,
 		"config":  config,
 	}})
 }
@@ -193,6 +200,11 @@ func handleRemovePeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePeerConfig(w http.ResponseWriter, r *http.Request) {
+	tunnelMode, err := requestTunnelMode(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	peer, err := database.GetPeer(r.PathValue("name"))
 	if err != nil {
 		fail(w, err)
@@ -209,12 +221,19 @@ func handlePeerConfig(w http.ResponseWriter, r *http.Request) {
 		PublicKey:    peer.PublicKey,
 		PresharedKey: peer.PresharedKey,
 		Address:      peer.Address,
-	})
+	}, tunnelMode)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, response{Success: true, Data: config})
+	writeJSON(w, response{Success: true, Data: map[string]any{
+		"mode":   tunnelMode,
+		"config": config,
+	}})
+}
+
+func requestTunnelMode(r *http.Request) (awg.TunnelMode, error) {
+	return awg.ParseTunnelMode(r.URL.Query().Get("mode"))
 }
 
 func fail(w http.ResponseWriter, err error) {

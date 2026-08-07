@@ -60,6 +60,11 @@ Add a peer per device, not per person — each one needs its own address:
 
 ## Hand configs to people
 
+By default clients get **smart** split tunneling: only curated foreign services
+(YouTube/Google, Instagram/WhatsApp, Discord, X, Reddit, Twitch, Netflix, plus
+the VPN DNS servers) go through the VPS. Yandex, Gosuslugi, banks and other
+local apps keep the ISP address — nobody has to tweak Amnezia per device.
+
 Print a config to paste into a desktop client:
 
 ```bash
@@ -71,6 +76,17 @@ Or show a QR code, which is how the phone apps import a tunnel:
 ```bash
 ./vpn-admin -action qr -name alice-phone
 ```
+
+For a classic full-tunnel profile (everything via the VPS):
+
+```bash
+./vpn-admin -action config -name alice-laptop -mode full
+./vpn-admin -action qr -name alice-phone -mode full
+```
+
+If a site you need is still on the Russian IP, either use `-mode full` for that
+person or extend the allowlist in `pkg/awg/smart_routes.go` and re-export their
+config.
 
 Configs contain the peer's private key. Send them over something private.
 
@@ -104,9 +120,13 @@ ssh root@your-vps 'systemctl restart awg-quick@awg0'
 Install the Amnezia app on each device, import the config or scan the QR code.
 The apps handle reconnection, sleep and network changes themselves.
 
-Confirm it works by checking your address changes:
+With the default smart profile, `curl` to a random site still shows your ISP IP.
+Check a tunneled destination instead (or export `-mode full` once to verify the
+exit address):
 
 ```bash
+./vpn-admin -action config -name alice-phone -mode full -out /tmp/full.conf
+# import /tmp/full.conf, then:
 curl -s https://api.ipify.org
 ```
 
