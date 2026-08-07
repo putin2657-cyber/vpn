@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh AmneziaWG NAT hairpin rules for same-exit P2P
+After=network-online.target awg-quick@awg0.service
+Wants=awg-quick@awg0.service
+
+[Service]
+Type=oneshot
+Environment=PUBLIC_IP=138.249.141.164
+Environment=VPN_NET=10.8.0.0/24
+ExecStart=/usr/local/sbin/awg-hairpin-nat.sh

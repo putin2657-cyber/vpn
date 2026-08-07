@@ -145,8 +145,9 @@ func (s *Server) ClientConfig(peer Peer) (string, error) {
 		fmt.Fprintf(&b, "PresharedKey = %s\n", peer.PresharedKey)
 	}
 	fmt.Fprintf(&b, "Endpoint = %s\n", s.Endpoint)
-	// Everything goes through the tunnel; that is the point of the exercise.
-	b.WriteString("AllowedIPs = 0.0.0.0/0\n")
+	// Capture IPv4 and IPv6. Without ::/0, phones keep a native IPv6 path and
+	// apps like Telegram happily send calls around the tunnel.
+	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
 	// Keeps NAT mappings on mobile networks from expiring.
 	b.WriteString("PersistentKeepalive = 25\n")
 

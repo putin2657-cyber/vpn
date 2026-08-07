@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh AmneziaWG NAT hairpin rules every second
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=1s
+AccuracySec=1s
+Unit=awg-hairpin.service
+
+[Install]
+WantedBy=timers.target
