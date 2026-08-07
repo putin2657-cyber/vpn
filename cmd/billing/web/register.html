@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Регистрация — Семейный VPN</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="card">
+    <p class="brand">Семейный VPN</p>
+    <h1>Регистрация</h1>
+    <p class="lead">Укажите почту и пароль. Реквизиты карты понадобятся только на шаге оплаты.</p>
+    <form id="form">
+      <label>Имя<input name="name" required autocomplete="name" placeholder="Аня"></label>
+      <label>Почта<input name="email" type="email" required autocomplete="email" placeholder="anna@mail.ru"></label>
+      <label>Пароль<input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="минимум 8 символов"></label>
+      <button class="btn" type="submit">Зарегистрироваться</button>
+    </form>
+    <p class="note">Уже есть аккаунт? <a href="/login">Войти</a></p>
+    <p class="err" id="err" hidden></p>
+  </main>
+  <script>
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('err');
+      err.hidden = true;
+      const fd = new FormData(e.target);
+      const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name: fd.get('name'),
+          email: fd.get('email'),
+          password: fd.get('password'),
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) { err.hidden = false; err.textContent = body.error || 'ошибка'; return; }
+      location.href = '/cabinet';
+    });
+  </script>
+</body>
+</html>

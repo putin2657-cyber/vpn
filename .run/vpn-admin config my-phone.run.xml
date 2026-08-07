@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="vpn-admin: config my-phone" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="untitled3" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="-action config -name my-phone -mode smart -db vpn.db" />
+    <kind value="PACKAGE" />
+    <package value="vpn-server/cmd/admin" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/cmd/admin/main.go" />
+    <method v="2" />
+  </configuration>
+</component>

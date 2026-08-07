@@ -6,9 +6,11 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +24,8 @@ import (
 
 //go:embed web/*
 var webFS embed.FS
+
+const sessionCookie = "vpn_session"
 
 func main() {
 	loadEnvFile(envOr("BILLING_ENV_FILE", "/opt/vpn/billing.env"))
@@ -107,11 +111,32 @@ func main() {
 }
 
 func newMux(svc *billing.Service) http.Handler {
+	static, err := fs.Sub(webFS, "web/static")
+	if err != nil {
+		log.Fatalf("embed static: %v", err)
+	}
+
 	mux := http.NewServeMux()
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+
+	mux.HandleFunc("GET /", serveFile("web/home.html"))
+	mux.HandleFunc("GET /register", serveFile("web/register.html"))
+	mux.HandleFunc("GET /login", serveFile("web/login.html"))
+	mux.HandleFunc("GET /cabinet", serveFile("web/cabinet.html"))
+	mux.HandleFunc("GET /cabinet/done", serveFile("web/cabinet-done.html"))
+
+	mux.HandleFunc("POST /api/register", handleRegister(svc))
+	mux.HandleFunc("POST /api/login", handleLogin(svc))
+	mux.HandleFunc("POST /api/logout", handleLogout(svc))
+	mux.HandleFunc("GET /api/me", handleMe(svc))
+	mux.HandleFunc("POST /api/me/pay", handleMePay(svc))
+	mux.HandleFunc("GET /api/me/config", handleMeConfig(svc))
+
+	// Legacy invite links still work.
 	mux.HandleFunc("GET /i/{token}", serveFile("web/index.html"))
 	mux.HandleFunc("GET /i/{token}/done", serveFile("web/done.html"))
 	mux.HandleFunc("GET /api/i/{token}", handleMemberStatus(svc))
@@ -133,6 +158,156 @@ func serveFile(name string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(raw)
 	}
+}
+
+func handleRegister(svc *billing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name     string `json:"name"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+			return
+		}
+		user, session, err := svc.Register(req.Email, req.Password, req.Name)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, db.ErrUserExists) {
+				status = http.StatusConflict
+			}
+			writeErr(w, status, err)
+			return
+		}
+		setSessionCookie(w, session.Token, r.TLS != nil || strings.HasPrefix(svc.Config.PublicBase, "https://"))
+		writeJSON(w, map[string]any{
+			"email":        user.Email,
+			"display_name": user.DisplayName,
+		})
+	}
+}
+
+func handleLogin(svc *billing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+			return
+		}
+		user, session, err := svc.Login(req.Email, req.Password)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, err)
+			return
+		}
+		setSessionCookie(w, session.Token, r.TLS != nil || strings.HasPrefix(svc.Config.PublicBase, "https://"))
+		writeJSON(w, map[string]any{
+			"email":        user.Email,
+			"display_name": user.DisplayName,
+		})
+	}
+}
+
+func handleLogout(svc *billing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			_ = svc.DB.DeleteSession(c.Value)
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookie,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+		})
+		writeJSON(w, map[string]string{"status": "ok"})
+	}
+}
+
+func handleMe(svc *billing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := currentUser(svc, r)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, err)
+			return
+		}
+		member, err := svc.DB.GetMemberByUserID(user.ID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"email":                user.Email,
+			"display_name":         user.DisplayName,
+			"peer_name":            member.PeerName,
+			"status":               member.Status,
+			"paid_until":           member.PaidUntil,
+			"payment_method_saved": member.PaymentMethodID != "",
+			"price":                billing.PriceRUB,
+		})
+	}
+}
+
+func handleMePay(svc *billing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := currentUser(svc, r)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, err)
+			return
+		}
+		url, err := svc.StartCheckoutForUser(user.ID)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, map[string]any{"confirmation_url": url})
+	}
+}
+
+func handleMeConfig(svc *billing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := currentUser(svc, r)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, err)
+			return
+		}
+		config, err := svc.ClientConfigForUser(user.ID)
+		if err != nil {
+			writeErr(w, http.StatusForbidden, err)
+			return
+		}
+		member, _ := svc.DB.GetMemberByUserID(user.ID)
+		name := "vpn.conf"
+		if member != nil {
+			name = member.PeerName + ".conf"
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+		_, _ = io.WriteString(w, config)
+	}
+}
+
+func currentUser(svc *billing.Service, r *http.Request) (*db.User, error) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		return nil, db.ErrSessionNotFound
+	}
+	return svc.DB.UserBySession(c.Value)
+}
+
+func setSessionCookie(w http.ResponseWriter, token string, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		MaxAge:   int((30 * 24 * time.Hour).Seconds()),
+	})
 }
 
 func handleMemberStatus(svc *billing.Service) http.HandlerFunc {

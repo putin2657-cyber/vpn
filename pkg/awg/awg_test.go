@@ -276,6 +276,7 @@ func TestClientConfigSmartModeKeepsLocalServicesDirect(t *testing.T) {
 		"1.1.1.1/32",
 		"1.0.0.1/32",
 		"142.250.0.0/15",
+		"149.154.160.0/20",
 		"157.240.0.0/16",
 		"PersistentKeepalive = 25",
 	})

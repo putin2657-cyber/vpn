@@ -2,16 +2,25 @@
 package billing
 
 import (
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
+	"vpn-server/pkg/awg"
 	"vpn-server/pkg/db"
 	"vpn-server/pkg/yookassa"
 )
+
+const sessionTTL = 30 * 24 * time.Hour
+
+var nonPeerChars = regexp.MustCompile(`[^a-z0-9-]+`)
 
 const (
 	// PriceRUB is the symbolic family contribution per month.
@@ -69,13 +78,69 @@ func (s *Service) Invite(displayName, peerName string) (*db.Member, string, erro
 	return member, s.Config.PublicBase + "/i/" + member.Token, nil
 }
 
+// Register creates a cabinet account, a disabled VPN peer, and a login session.
+func (s *Service) Register(email, password, displayName string) (*db.User, *db.Session, error) {
+	user, err := s.DB.CreateUser(email, password, displayName)
+	if err != nil {
+		return nil, nil, err
+	}
+	peerName, err := s.allocatePeerName(user.Email)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := s.DB.AddPeer(peerName); err != nil {
+		return nil, nil, err
+	}
+	// Stay offline until the first successful payment.
+	if err := s.DB.SetPeerEnabled(peerName, false); err != nil {
+		return nil, nil, err
+	}
+	if _, err := s.DB.CreateMemberForUser(user.ID, user.DisplayName, peerName); err != nil {
+		return nil, nil, err
+	}
+	session, err := s.DB.CreateSession(user.ID, sessionTTL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return user, session, nil
+}
+
+// Login authenticates and issues a session cookie token.
+func (s *Service) Login(email, password string) (*db.User, *db.Session, error) {
+	user, err := s.DB.AuthenticateUser(email, password)
+	if err != nil {
+		return nil, nil, err
+	}
+	session, err := s.DB.CreateSession(user.ID, sessionTTL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return user, session, nil
+}
+
 func (s *Service) StartCheckout(token string) (confirmURL string, err error) {
 	member, err := s.DB.GetMemberByToken(token)
 	if err != nil {
 		return "", err
 	}
-	idem := fmt.Sprintf("initial-%d-%d", member.ID, time.Now().Unix()/60)
-	returnURL := s.Config.PublicBase + "/i/" + member.Token + "/done"
+	return s.startCheckout(member, s.Config.PublicBase+"/i/"+member.Token+"/done")
+}
+
+// StartCheckoutForUser begins YooKassa payment from the personal cabinet.
+func (s *Service) StartCheckoutForUser(userID int) (confirmURL string, err error) {
+	member, err := s.DB.GetMemberByUserID(userID)
+	if err != nil {
+		return "", err
+	}
+	return s.startCheckout(member, s.Config.PublicBase+"/cabinet/done")
+}
+
+func (s *Service) startCheckout(member *db.Member, returnURL string) (string, error) {
+	kind := db.PaymentInitial
+	if member.PaymentMethodID != "" || member.Status == db.MemberActive {
+		kind = db.PaymentRenewal
+	}
+	idem := fmt.Sprintf("%s-%d-%d", kind, member.ID, time.Now().Unix()/60)
 	payment, err := s.YK.CreateRedirectPayment(
 		idem,
 		PriceRUB,
@@ -83,19 +148,110 @@ func (s *Service) StartCheckout(token string) (confirmURL string, err error) {
 		returnURL,
 		map[string]string{
 			"member_id": fmt.Sprintf("%d", member.ID),
-			"kind":      db.PaymentInitial,
+			"kind":      kind,
 		},
 	)
 	if err != nil {
 		return "", err
 	}
-	if err := s.DB.RecordPayment(member.ID, payment.ID, PriceRUB, payment.Status, db.PaymentInitial); err != nil {
+	if err := s.DB.RecordPayment(member.ID, payment.ID, PriceRUB, payment.Status, kind); err != nil {
 		return "", err
 	}
 	if payment.Confirmation == nil || payment.Confirmation.ConfirmationURL == "" {
 		return "", fmt.Errorf("yookassa did not return a confirmation URL")
 	}
 	return payment.Confirmation.ConfirmationURL, nil
+}
+
+// ClientConfigForUser returns a smart AmneziaWG config once the subscription is active.
+func (s *Service) ClientConfigForUser(userID int) (string, error) {
+	member, err := s.DB.GetMemberByUserID(userID)
+	if err != nil {
+		return "", err
+	}
+	if member.Status != db.MemberActive {
+		return "", fmt.Errorf("subscription is not active — pay 120 ₽ first")
+	}
+	peer, err := s.DB.GetPeer(member.PeerName)
+	if err != nil {
+		return "", err
+	}
+	if !peer.Enabled {
+		return "", fmt.Errorf("VPN access is disabled for this account")
+	}
+	server, err := s.DB.Server()
+	if err != nil {
+		return "", err
+	}
+	return server.ClientConfig(awg.Peer{
+		Name:         peer.Name,
+		PrivateKey:   peer.PrivateKey,
+		PublicKey:    peer.PublicKey,
+		PresharedKey: peer.PresharedKey,
+		Address:      peer.Address,
+	}, awg.TunnelSmart)
+}
+
+func (s *Service) allocatePeerName(email string) (string, error) {
+	base := peerNameFromEmail(email)
+	candidates := []string{base, base + "-2", base + "-3"}
+	for i := 0; i < 5; i++ {
+		suffix, err := randomSuffix(4)
+		if err != nil {
+			return "", err
+		}
+		candidates = append(candidates, base+"-"+suffix)
+	}
+	for _, name := range candidates {
+		if IsOwnerPeer(name) {
+			continue
+		}
+		if _, err := s.DB.GetPeer(name); err != nil {
+			if errors.Is(err, db.ErrPeerNotFound) {
+				return name, nil
+			}
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("could not allocate a free peer name")
+}
+
+func peerNameFromEmail(email string) string {
+	local := email
+	if at := strings.Index(email, "@"); at > 0 {
+		local = email[:at]
+	}
+	local = strings.Map(func(r rune) rune {
+		r = unicode.ToLower(r)
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == '_' {
+			return r
+		}
+		return -1
+	}, local)
+	local = strings.ReplaceAll(local, ".", "-")
+	local = strings.ReplaceAll(local, "_", "-")
+	local = nonPeerChars.ReplaceAllString(local, "")
+	local = strings.Trim(local, "-")
+	if local == "" {
+		local = "user"
+	}
+	if len(local) > 24 {
+		local = local[:24]
+	}
+	return "u-" + local
+}
+
+func randomSuffix(n int) (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	out := make([]byte, n)
+	for i := range b {
+		out[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	return string(out), nil
 }
 
 // HandleYooKassaNotification re-fetches the payment and applies success/failure.

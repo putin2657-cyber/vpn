@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Личный кабинет — Семейный VPN</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="card wide">
+    <div class="top">
+      <div>
+        <p class="brand">Семейный VPN</p>
+        <h1>Личный кабинет</h1>
+      </div>
+      <button class="btn secondary small" id="logout" type="button">Выйти</button>
+    </div>
+    <p class="lead">Оплата 120 ₽ / месяц с автопродлением. После оплаты скачайте конфиг и импортируйте в Amnezia.</p>
+    <div class="row"><span>Имя</span><b id="name">—</b></div>
+    <div class="row"><span>Почта</span><b id="email">—</b></div>
+    <div class="row"><span>Статус</span><span class="status" id="status">—</span></div>
+    <div class="row"><span>Оплачено до</span><b id="until">—</b></div>
+    <div class="row"><span>Устройство VPN</span><b id="peer">—</b></div>
+    <div class="actions">
+      <button class="btn" id="pay" type="button">Оплатить / продлить 120 ₽</button>
+      <a class="btn secondary" id="cfg" href="/api/me/config">Скачать конфиг</a>
+    </div>
+    <p class="note">Один аккаунт = одно устройство. Не делитесь конфигом — иначе связь будет рваться.</p>
+    <p class="err" id="err" hidden></p>
+  </main>
+  <script>
+    const err = document.getElementById('err');
+    const statusEl = document.getElementById('status');
+    function fmtDate(v) {
+      if (!v) return 'ещё не оплачено';
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString('ru-RU');
+    }
+    async function load() {
+      const res = await fetch('/api/me');
+      if (res.status === 401) { location.href = '/login'; return; }
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'ошибка');
+      document.getElementById('name').textContent = body.display_name;
+      document.getElementById('email').textContent = body.email;
+      document.getElementById('peer').textContent = body.peer_name;
+      document.getElementById('until').textContent = fmtDate(body.paid_until);
+      statusEl.textContent = body.status;
+      statusEl.className = 'status ' + body.status;
+      document.getElementById('cfg').style.display = body.status === 'active' ? '' : 'none';
+    }
+    document.getElementById('pay').addEventListener('click', async () => {
+      err.hidden = true;
+      const res = await fetch('/api/me/pay', { method: 'POST' });
+      const body = await res.json();
+      if (!res.ok) { err.hidden = false; err.textContent = body.error || 'ошибка оплаты'; return; }
+      location.href = body.confirmation_url;
+    });
+    document.getElementById('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/';
+    });
+    load().catch((e) => { err.hidden = false; err.textContent = e.message; });
+  </script>
+</body>
+</html>

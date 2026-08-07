@@ -114,7 +114,10 @@ func (db *DB) init() error {
 	if _, err := db.conn.Exec(schema); err != nil {
 		return err
 	}
-	return db.ensurePeerEnabledColumn()
+	if err := db.ensurePeerEnabledColumn(); err != nil {
+		return err
+	}
+	return db.ensureAuthSchema()
 }
 
 func (db *DB) ensurePeerEnabledColumn() error {

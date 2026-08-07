@@ -61,9 +61,10 @@ Add a peer per device, not per person — each one needs its own address:
 ## Hand configs to people
 
 By default clients get **smart** split tunneling: only curated foreign services
-(YouTube/Google, Instagram/WhatsApp, Discord, X, Reddit, Twitch, Netflix, plus
-the VPN DNS servers) go through the VPS. Yandex, Gosuslugi, banks and other
-local apps keep the ISP address — nobody has to tweak Amnezia per device.
+(YouTube/Google, Telegram, Instagram/WhatsApp, Discord, X, Reddit, Twitch,
+Netflix, plus the VPN DNS servers) go through the VPS. Yandex, Gosuslugi, banks
+and other local apps keep the ISP address — nobody has to tweak Amnezia per
+device.
 
 Print a config to paste into a desktop client:
 
@@ -144,8 +145,11 @@ Without `-token` one is generated and printed at startup.
 
 ## Family billing (120 ₽ / month)
 
-A small portal on the same VPS takes a symbolic **120 RUB** subscription through
-[YooKassa](https://yookassa.ru/), saves the card, and auto-renews every 30 days.
+A small portal on the same VPS lets relatives **register by email**, pay a
+symbolic **120 RUB** through [YooKassa](https://yookassa.ru/), save the card,
+and auto-renew every 30 days. After payment they download their Amnezia config
+from the personal cabinet — you do not collect cards or hand-make invite links.
+
 If renewal fails there is a **3-day grace**, then that peer is dropped from
 `awg0.conf` until they pay again.
 
@@ -161,16 +165,16 @@ Edit `/opt/vpn/billing.env` with your YooKassa shop id and secret, enable the
 unit, and point the YooKassa HTTP notifications to
 `https://<host>/webhook/yookassa`.
 
-Invite each relative (one peer = one payer). These peers are reserved for the
-admin and **cannot** be billed: `my-phone`, `my-second`, `device-03`,
-`device-06`. Use the free ones instead, for example `device-04` … `device-05`,
-`device-07` … `device-10`:
+Share the public site URL (for example `https://138.249.141.164.sslip.io`).
+People open **Создать аккаунт**, pay, then **Скачать конфиг**.
+
+These peers are reserved for the admin and never go through billing:
+`my-phone`, `my-second`, `device-03`, `device-06`. Legacy invite links still
+work if you need them:
 
 ```bash
 ssh root@YOUR_VPS '/opt/vpn/vpn-billing -action invite -name Mama -peer device-04'
 ```
-
-Send them the invite link. Owner peers stay online without a subscription.
 
 ## Layout
 

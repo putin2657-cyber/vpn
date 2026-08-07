@@ -1,0 +1,110 @@
+:root {
+  --bg: #101820;
+  --card: #182230;
+  --text: #eef3f8;
+  --muted: #93a4b5;
+  --line: #2a3a4c;
+  --accent: #4aa3ff;
+  --ok: #3ecf8e;
+  --warn: #f0b429;
+  --bad: #ff8b8b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(900px 420px at 12% -8%, #24486d 0%, transparent 55%),
+    radial-gradient(700px 380px at 100% 0%, #1a3540 0%, transparent 45%),
+    var(--bg);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.card {
+  width: min(440px, 100%);
+  background: color-mix(in srgb, var(--card) 92%, black);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 28px 24px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.35);
+}
+.card.wide { width: min(520px, 100%); }
+.brand {
+  margin: 0 0 6px;
+  font-size: .85rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+h1 { margin: 0 0 10px; font-size: 1.6rem; }
+.lead, .note { color: var(--muted); line-height: 1.45; }
+.lead { margin: 0 0 18px; }
+.note { margin: 16px 0 0; font-size: .85rem; }
+.note a, a { color: #8cc6ff; }
+label {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: .9rem;
+  color: var(--muted);
+}
+input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #0f1620;
+  color: var(--text);
+  font: inherit;
+}
+.actions { display: grid; gap: 10px; margin-top: 18px; }
+.btn {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font: inherit;
+  font-weight: 650;
+  text-align: center;
+  text-decoration: none;
+  color: #041018;
+  background: linear-gradient(180deg, #79bfff, var(--accent));
+  cursor: pointer;
+}
+.btn.secondary {
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line);
+}
+.btn.small { width: auto; padding: 8px 12px; font-size: .85rem; }
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+  font-size: .95rem;
+  color: var(--muted);
+}
+.row b { color: var(--text); font-weight: 600; }
+.status {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: .8rem;
+  background: #243040;
+}
+.status.active { color: var(--ok); }
+.status.past_due, .status.invited { color: var(--warn); }
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 8px;
+}
+.err { color: var(--bad); margin-top: 12px; }

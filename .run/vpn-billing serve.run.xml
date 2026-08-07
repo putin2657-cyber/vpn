@@ -1,0 +1,20 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="vpn-billing: serve" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="untitled3" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="-action serve -db vpn.db" />
+    <envs>
+      <env name="BILLING_ENV_FILE" value="$PROJECT_DIR$/deploy/billing.env.example" />
+      <env name="BILLING_ADDR" value="127.0.0.1:8088" />
+      <env name="BILLING_PUBLIC_URL" value="http://127.0.0.1:8088" />
+      <env name="BILLING_ADMIN_TOKEN" value="dev-admin-token" />
+      <env name="YOOKASSA_SHOP_ID" value="replace_me" />
+      <env name="YOOKASSA_SECRET_KEY" value="replace_me" />
+    </envs>
+    <kind value="PACKAGE" />
+    <package value="vpn-server/cmd/billing" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/cmd/billing/main.go" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — Семейный VPN</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="card">
+    <p class="brand">Семейный VPN</p>
+    <h1>Вход</h1>
+    <form id="form">
+      <label>Почта<input name="email" type="email" required autocomplete="email"></label>
+      <label>Пароль<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="btn" type="submit">Войти</button>
+    </form>
+    <p class="note">Нет аккаунта? <a href="/register">Зарегистрироваться</a></p>
+    <p class="err" id="err" hidden></p>
+  </main>
+  <script>
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('err');
+      err.hidden = true;
+      const fd = new FormData(e.target);
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
+      });
+      const body = await res.json();
+      if (!res.ok) { err.hidden = false; err.textContent = body.error || 'ошибка'; return; }
+      location.href = '/cabinet';
+    });
+  </script>
+</body>
+</html>

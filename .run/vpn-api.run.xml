@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="vpn-api" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="untitled3" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="-addr 127.0.0.1:3000 -db vpn.db" />
+    <kind value="PACKAGE" />
+    <package value="vpn-server/cmd/api" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/cmd/api/main.go" />
+    <method v="2" />
+  </configuration>
+</component>
