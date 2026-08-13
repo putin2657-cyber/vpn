@@ -60,11 +60,11 @@ Add a peer per device, not per person — each one needs its own address:
 
 ## Hand configs to people
 
-By default clients get **smart** split tunneling: only curated foreign services
-(YouTube/Google, Telegram, Instagram/WhatsApp, Discord, X, Reddit, Twitch,
-Netflix, plus the VPN DNS servers) go through the VPS. Yandex, Gosuslugi, banks
-and other local apps keep the ISP address — nobody has to tweak Amnezia per
-device.
+By default clients get a **full tunnel**: Telegram, YouTube, CryptoBot/Wallet,
+Apple and the rest of the public internet go through the VPS
+(`AllowedIPs = 0.0.0.0/0, ::/0`). A true “everything except RU” CIDR list is too
+large for mobile Amnezia imports — if a bank or Gosuslugi must stay on the ISP
+IP, exclude that site/app in the Amnezia client UI.
 
 Print a config to paste into a desktop client:
 
@@ -78,16 +78,7 @@ Or show a QR code, which is how the phone apps import a tunnel:
 ./vpn-admin -action qr -name alice-phone
 ```
 
-For a classic full-tunnel profile (everything via the VPS):
-
-```bash
-./vpn-admin -action config -name alice-laptop -mode full
-./vpn-admin -action qr -name alice-phone -mode full
-```
-
-If a site you need is still on the Russian IP, either use `-mode full` for that
-person or extend the allowlist in `pkg/awg/smart_routes.go` and re-export their
-config.
+`-mode smart` and `-mode full` currently produce the same routing.
 
 Configs contain the peer's private key. Send them over something private.
 
@@ -131,17 +122,20 @@ exit address):
 curl -s https://api.ipify.org
 ```
 
-## Admin API
+## Live peer sync and status
 
-Optional HTTP interface for the desktop panel. It can mint and read peer keys,
-so it binds to loopback and requires a bearer token:
+On the VPS, `add` / `remove` / `sync` apply peers with `awg set` — no tunnel
+restart for everyone else:
 
 ```bash
-./vpn-api -addr 127.0.0.1:3000 -token "$(openssl rand -hex 24)"
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/peers
+./vpn-admin -action add -name guest-01 -server-conf /etc/amnezia/amneziawg/awg0.conf
+./vpn-admin -action list          # handshake + RX/TX from `awg show`
+./vpn-admin -action sync -server-conf /etc/amnezia/amneziawg/awg0.conf
 ```
 
-Without `-token` one is generated and printed at startup.
+Health timer + Mac status API live under `deploy/vpn-monitor.*` and
+`cmd/statusd`. The old Electron panel was removed; use `macos/VPNControl`
+(SwiftUI) and `android/FamilyVPN` instead.
 
 ## Family billing (120 ₽ / month)
 
@@ -180,15 +174,17 @@ ssh root@YOUR_VPS '/opt/vpn/vpn-billing -action invite -name Mama -peer device-0
 
 | Path | Description |
 |------|-------------|
-| `pkg/awg` | Keys, obfuscation parameters, config rendering |
+| `pkg/awg` | Keys, configs, live `awg` apply + show parsing |
 | `pkg/billing` | 120 ₽ subscriptions, renewals, peer sync |
 | `pkg/yookassa` | YooKassa Payments API client |
 | `pkg/db` | Server identity, peers and members in SQLite |
-| `cmd/admin` | Command line management |
+| `cmd/admin` | CLI: peers, QR, live sync, handshake list |
 | `cmd/billing` | Family payment portal |
-| `cmd/api` | HTTP API for the desktop panel |
-| `deploy` | VPS installation and billing units |
-| `desktop` | Electron admin panel |
+| `cmd/statusd` | Status JSON for the Mac control app |
+| `cmd/api` | Optional loopback peer API |
+| `deploy` | VPS install, billing, monitor units |
+| `macos/VPNControl` | Native Mac status utility (SwiftUI) |
+| `android/FamilyVPN` | Own Android app (AmneziaWG tunnel, no Amnezia UI) |
 
 ## Notes
 

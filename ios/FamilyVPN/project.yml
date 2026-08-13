@@ -1,0 +1,81 @@
+name: FamilyVPN
+options:
+  bundleIdPrefix: com.Xdd
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_BITCODE: NO
+    DEVELOPMENT_TEAM: "9363A386MV"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Apple Distribution: Lee Jone (9363A386MV)"
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(SRCROOT)/Vendor/amneziawg-apple/Sources/WireGuardKitGo/out
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -lwg-go
+packages:
+  WireGuardKit:
+    path: Vendor/amneziawg-apple
+targets:
+  FamilyVPN:
+    type: application
+    platform: iOS
+    sources:
+      - path: FamilyVPN
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.Xdd.48f160f
+        INFOPLIST_FILE: FamilyVPN/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FamilyVPN/FamilyVPN.entitlements
+        CURRENT_PROJECT_VERSION: 2
+        MARKETING_VERSION: 0.2.0
+        PROVISIONING_PROFILE: "acfb638e-bf68-4511-be5f-9bcacb418a20"
+        PROVISIONING_PROFILE_SPECIFIER: "ded9b"
+    dependencies:
+      - target: Tunnel
+        embed: true
+      - package: WireGuardKit
+        product: WireGuardKit
+    info:
+      path: FamilyVPN/Info.plist
+      properties:
+        CFBundleDisplayName: Family VPN
+  Tunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Tunnel
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.Xdd.48f160f.tunnel
+        INFOPLIST_FILE: Tunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
+        SKIP_INSTALL: YES
+        CURRENT_PROJECT_VERSION: 2
+        MARKETING_VERSION: 0.2.0
+        # Same profile as app — ESign will often re-sign; local install of extension may fail without matching AppID.
+        PROVISIONING_PROFILE: "acfb638e-bf68-4511-be5f-9bcacb418a20"
+        PROVISIONING_PROFILE_SPECIFIER: "ded9b"
+    dependencies:
+      - package: WireGuardKit
+        product: WireGuardKit
+    info:
+      path: Tunnel/Info.plist
+schemes:
+  FamilyVPN:
+    build:
+      targets:
+        FamilyVPN: all
+        Tunnel: all
+    run:
+      config: Debug
+    archive:
+      config: Release

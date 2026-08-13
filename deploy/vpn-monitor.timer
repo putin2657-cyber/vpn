@@ -1,0 +1,10 @@
+[Unit]
+Description=Run VPN health check every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=vpn-monitor.service
+
+[Install]
+WantedBy=timers.target

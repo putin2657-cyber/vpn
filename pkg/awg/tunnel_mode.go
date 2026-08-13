@@ -9,8 +9,9 @@ import (
 type TunnelMode string
 
 const (
-	// TunnelSmart sends only curated foreign services through the tunnel.
-	// Everything else (Yandex, Gosuslugi, banks, local apps) keeps the ISP IP.
+	// TunnelSmart is a full tunnel minus a curated Russian-service exclude
+	// list (marketplaces, Yandex apps, banks, gov/medical portals, …).
+	// Those destinations stay on the ISP path; everything else uses the VPN.
 	TunnelSmart TunnelMode = "smart"
 	// TunnelFull captures all IPv4 and IPv6 traffic.
 	TunnelFull TunnelMode = "full"

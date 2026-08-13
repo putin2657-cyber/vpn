@@ -4,6 +4,8 @@
 /vpn-admin
 /vpn-api
 /vpn-billing
+/vpn-statusd
+/vpn-vpnbot
 
 # Runtime data
 *.db
@@ -18,26 +20,46 @@ my-phone.conf
 # TLS private key
 server.key
 
-# Node / Electron
-desktop/node_modules/
-desktop/build/
-desktop/dist/
-desktop-client/node_modules/
-desktop-client/dist/
+# Legacy Electron panel (removed)
+desktop/
+desktop-client/
 
 # Android
+android/**/.gradle/
+android/**/build/
+android/**/local.properties
+android/**/.idea/
 mobile/android/.gradle/
 mobile/android/build/
 mobile/android/app/build/
 mobile/android/local.properties
 
-# Xcode
-mobile/ios/**/xcuserdata/
-mobile/ios/**/*.xcworkspace/xcshareddata/
+# Xcode / macOS / iOS
+macos/**/xcuserdata/
+macos/**/*.xcworkspace/xcshareddata/
+macos/**/DerivedData/
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/*.xcworkspace/xcshareddata/swiftpm/
+ios/FamilyVPN/signing/*
+!ios/FamilyVPN/signing/.gitkeep
+ios/FamilyVPN/Vendor/
+ios/FamilyVPN/build/
+ios/FamilyVPN/dist/
+ios/FamilyVPN/*.xcodeproj/
+ios/FamilyVPN/*.xcworkspace/
+*.p12
+*.mobileprovision
+*.cer
+*.pem
+.DS_Store
 
 # CLion / IDE
 /cmake-build-debug/
 .idea/
+CMakeLists.txt
+*.cpp
 
-# macOS
-.DS_Store
+/vpn-admin-linux
+/vpn-vpnbot-linux
+ios/FamilyVPN/build-platform.log

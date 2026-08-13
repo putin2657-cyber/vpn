@@ -117,7 +117,10 @@ func (db *DB) init() error {
 	if err := db.ensurePeerEnabledColumn(); err != nil {
 		return err
 	}
-	return db.ensureAuthSchema()
+	if err := db.ensureAuthSchema(); err != nil {
+		return err
+	}
+	return db.ensureTelegramSchema()
 }
 
 func (db *DB) ensurePeerEnabledColumn() error {

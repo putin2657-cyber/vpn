@@ -138,6 +138,9 @@ func (s *Server) ClientConfig(peer Peer, mode TunnelMode) (string, error) {
 	b.WriteString("[Interface]\n")
 	fmt.Fprintf(&b, "PrivateKey = %s\n", peer.PrivateKey)
 	fmt.Fprintf(&b, "Address = %s/32\n", peer.Address)
+	// Smart mode also sets DNS: Apple/FaceTime hostnames must resolve via a
+	// clean resolver when the ISP path is filtered; AllowedIPs then sends
+	// Apple (17.0.0.0/8) through the tunnel.
 	if len(s.DNS) > 0 {
 		fmt.Fprintf(&b, "DNS = %s\n", strings.Join(s.DNS, ", "))
 	}
@@ -160,12 +163,12 @@ func (s *Server) ClientConfig(peer Peer, mode TunnelMode) (string, error) {
 }
 
 func (s *Server) clientAllowedIPs(mode TunnelMode) string {
-	if mode == TunnelFull {
-		// Capture IPv4 and IPv6. Without ::/0, phones keep a native IPv6 path
-		// and apps like Telegram happily send calls around the tunnel.
+	switch mode {
+	case TunnelSmart:
+		return strings.Join(SmartAllowedIPs(s.DNS), ", ")
+	default:
 		return "0.0.0.0/0, ::/0"
 	}
-	return strings.Join(SmartAllowedIPs(s.DNS), ", ")
 }
 
 func (s *Server) listenPort() int {

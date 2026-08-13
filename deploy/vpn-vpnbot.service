@@ -1,0 +1,15 @@
+[Unit]
+Description=Family VPN Telegram bot (Crypto Pay)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vpn
+EnvironmentFile=/opt/vpn/vpnbot.env
+ExecStart=/opt/vpn/vpn-vpnbot -db /opt/vpn/vpn.db
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

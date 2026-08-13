@@ -29,15 +29,16 @@ var ErrMemberNotFound = errors.New("member not found")
 
 // Member is one paying family user linked to a VPN peer.
 type Member struct {
-	ID              int
-	UserID          int
-	DisplayName     string
-	PeerName        string
-	Token           string
-	PaymentMethodID string
-	Status          string
-	PaidUntil       string
-	Created         string
+	ID               int
+	UserID           int
+	DisplayName      string
+	PeerName         string
+	Token            string
+	PaymentMethodID  string
+	Status           string
+	PaidUntil        string
+	Created          string
+	TelegramUsername string
 }
 
 // Payment is one YooKassa charge attempt.
@@ -113,7 +114,7 @@ func (db *DB) CreateMemberForUser(userID int, displayName, peerName string) (*Me
 
 func (db *DB) GetMemberByID(id int) (*Member, error) {
 	row := db.conn.QueryRow(`
-		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
 		FROM members WHERE id = ?`, id)
 	member, err := scanMember(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -124,7 +125,7 @@ func (db *DB) GetMemberByID(id int) (*Member, error) {
 
 func (db *DB) GetMemberByToken(token string) (*Member, error) {
 	row := db.conn.QueryRow(`
-		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
 		FROM members WHERE token = ?`, token)
 	member, err := scanMember(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -135,8 +136,24 @@ func (db *DB) GetMemberByToken(token string) (*Member, error) {
 
 func (db *DB) GetMemberByUserID(userID int) (*Member, error) {
 	row := db.conn.QueryRow(`
-		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
 		FROM members WHERE user_id = ? ORDER BY id LIMIT 1`, userID)
+	member, err := scanMember(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrMemberNotFound
+	}
+	return member, err
+}
+
+// GetMemberByPeerName returns the billing member linked to a VPN peer, if any.
+func (db *DB) GetMemberByPeerName(peerName string) (*Member, error) {
+	peerName = strings.TrimSpace(peerName)
+	if peerName == "" {
+		return nil, ErrMemberNotFound
+	}
+	row := db.conn.QueryRow(`
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
+		FROM members WHERE peer_name = ? ORDER BY id LIMIT 1`, peerName)
 	member, err := scanMember(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrMemberNotFound
@@ -146,7 +163,7 @@ func (db *DB) GetMemberByUserID(userID int) (*Member, error) {
 
 func (db *DB) ListMembers() ([]*Member, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
 		FROM members ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -200,7 +217,7 @@ func (db *DB) GetPayment(ykPaymentID string) (*Payment, error) {
 func (db *DB) MembersDueForRenewal(now time.Time, ahead time.Duration) ([]*Member, error) {
 	cutoff := now.Add(ahead).UTC().Format(time.RFC3339)
 	rows, err := db.conn.Query(`
-		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
 		FROM members
 		WHERE status IN (?, ?)
 		  AND payment_method_id != ''
@@ -228,7 +245,7 @@ func (db *DB) MembersDueForRenewal(now time.Time, ahead time.Duration) ([]*Membe
 func (db *DB) MembersPastGrace(now time.Time, grace time.Duration) ([]*Member, error) {
 	cutoff := now.Add(-grace).UTC().Format(time.RFC3339)
 	rows, err := db.conn.Query(`
-		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created
+		SELECT id, user_id, display_name, peer_name, token, payment_method_id, status, paid_until, created, telegram_username
 		FROM members
 		WHERE status != ?
 		  AND paid_until != ''
@@ -253,7 +270,7 @@ func (db *DB) MembersPastGrace(now time.Time, grace time.Duration) ([]*Member, e
 
 func scanMember(src scanner) (*Member, error) {
 	var m Member
-	err := src.Scan(&m.ID, &m.UserID, &m.DisplayName, &m.PeerName, &m.Token, &m.PaymentMethodID, &m.Status, &m.PaidUntil, &m.Created)
+	err := src.Scan(&m.ID, &m.UserID, &m.DisplayName, &m.PeerName, &m.Token, &m.PaymentMethodID, &m.Status, &m.PaidUntil, &m.Created, &m.TelegramUsername)
 	return &m, err
 }
 

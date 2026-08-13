@@ -20,7 +20,7 @@ import (
 var (
 	dbPath = flag.String("db", "vpn.db", "path to the SQLite database")
 	action = flag.String("action", "list",
-		"action: init, add, list, remove, config, qr, server-config")
+		"action: init, add, list, remove, config, qr, server-config, sync")
 
 	name     = flag.String("name", "", "peer name for add, remove, config and qr")
 	endpoint = flag.String("endpoint", "", "public address clients connect to, host:port (init)")
@@ -32,6 +32,11 @@ var (
 	mode     = flag.String("mode", string(awg.DefaultTunnelMode),
 		"client tunnel mode for add/config/qr: smart (default) or full")
 	out = flag.String("out", "", "write the config to this file instead of stdout")
+	iface = flag.String("awg-iface", envOr("AWG_IFACE", awg.DefaultInterface),
+		"running AmneziaWG interface for live apply / list stats")
+	live = flag.Bool("live", true, "apply add/remove on the running interface without restart")
+	serverConf = flag.String("server-conf", envOr("AWG_CONF", ""),
+		"also rewrite this awg0.conf after add/remove/sync (no restart)")
 )
 
 func main() {
@@ -69,6 +74,8 @@ func run(database *db.DB) error {
 		return showQR(database)
 	case "server-config":
 		return showServerConfig(database)
+	case "sync":
+		return syncPeers(database)
 	default:
 		return fmt.Errorf("unknown action %q", *action)
 	}
@@ -163,9 +170,11 @@ func addPeer(database *db.DB) error {
 	if err := emit(config); err != nil {
 		return err
 	}
-	fmt.Println("\nApply the new peer on the server:")
-	fmt.Println("  admin -action server-config -out /etc/amnezia/amneziawg/awg0.conf")
-	fmt.Println("  systemctl restart awg-quick@awg0")
+	if err := applyPeerChange(database, toAWGPeer(peer), false); err != nil {
+		fmt.Printf("\nLive apply skipped: %v\n", err)
+		fmt.Println("Apply on the server:")
+		fmt.Println("  admin -action sync -server-conf /etc/amnezia/amneziawg/awg0.conf")
+	}
 	return nil
 }
 
@@ -179,14 +188,34 @@ func listPeers(database *db.DB) error {
 		return nil
 	}
 
-	fmt.Printf("%-4s %-24s %-14s %-8s %-20s\n", "ID", "Name", "Address", "Enabled", "Created")
-	fmt.Println(strings.Repeat("-", 76))
+	liveStats, liveErr := awg.ShowPeers(*iface)
+	if liveErr != nil {
+		fmt.Printf("(no live awg stats: %v)\n\n", liveErr)
+	}
+
+	fmt.Printf("%-4s %-16s %-12s %-7s %-12s %-14s %-14s %s\n",
+		"ID", "Name", "Address", "On", "Handshake", "RX", "TX", "Endpoint")
+	fmt.Println(strings.Repeat("-", 110))
 	for _, peer := range peers {
 		enabled := "yes"
 		if !peer.Enabled {
 			enabled = "no"
 		}
-		fmt.Printf("%-4d %-24s %-14s %-8s %-20s\n", peer.ID, peer.Name, peer.Address, enabled, peer.Created)
+		hs, rx, tx, endpoint := "—", "—", "—", "—"
+		if liveStats != nil {
+			if st, ok := liveStats[peer.PublicKey.String()]; ok {
+				hs = st.HandshakeHuman
+				rx = awg.FormatBytes(st.RxBytes)
+				tx = awg.FormatBytes(st.TxBytes)
+				if st.Endpoint != "" {
+					endpoint = st.Endpoint
+				}
+			} else if peer.Enabled {
+				hs = "offline"
+			}
+		}
+		fmt.Printf("%-4d %-16s %-12s %-7s %-12s %-14s %-14s %s\n",
+			peer.ID, peer.Name, peer.Address, enabled, hs, rx, tx, endpoint)
 	}
 	return nil
 }
@@ -195,14 +224,108 @@ func removePeer(database *db.DB) error {
 	if *name == "" {
 		return fmt.Errorf("-name is required")
 	}
+	peer, err := database.GetPeer(*name)
+	if err != nil {
+		return err
+	}
 	if err := database.RemovePeer(*name); err != nil {
 		return err
 	}
 
-	fmt.Printf("Peer %q removed.\n", *name)
-	fmt.Println("It keeps working until you update the server:")
-	fmt.Println("  admin -action server-config -out /etc/amnezia/amneziawg/awg0.conf")
-	fmt.Println("  systemctl restart awg-quick@awg0")
+	fmt.Printf("Peer %q removed from the database.\n", *name)
+	if err := applyPeerChange(database, toAWGPeer(peer), true); err != nil {
+		fmt.Printf("Live remove skipped: %v\n", err)
+		fmt.Println("Run on the server: admin -action sync -server-conf /etc/amnezia/amneziawg/awg0.conf")
+	}
+	return nil
+}
+
+func syncPeers(database *db.DB) error {
+	if !awg.AWGAvailable() {
+		return fmt.Errorf("awg not found on PATH — run sync on the VPS")
+	}
+	want, err := database.AWGPeers()
+	if err != nil {
+		return err
+	}
+	liveStats, err := awg.ShowPeers(*iface)
+	if err != nil {
+		return err
+	}
+	wantKeys := map[string]awg.Peer{}
+	for _, peer := range want {
+		wantKeys[peer.PublicKey.String()] = peer
+		if _, ok := liveStats[peer.PublicKey.String()]; !ok {
+			if err := awg.AddPeerLive(*iface, peer); err != nil {
+				return fmt.Errorf("add %s: %w", peer.Name, err)
+			}
+			fmt.Printf("live + %s (%s)\n", peer.Name, peer.Address)
+		}
+	}
+	for pk := range liveStats {
+		if _, ok := wantKeys[pk]; !ok {
+			if err := awg.RemovePeerLive(*iface, pk); err != nil {
+				return fmt.Errorf("remove %s: %w", pk, err)
+			}
+			fmt.Printf("live - %s\n", pk)
+		}
+	}
+	if err := writeServerConf(database); err != nil {
+		return err
+	}
+	fmt.Printf("Interface %s synced with vpn.db (no restart).\n", *iface)
+	return nil
+}
+
+func applyPeerChange(database *db.DB, peer awg.Peer, removing bool) error {
+	if !*live {
+		return writeServerConf(database)
+	}
+	if !awg.AWGAvailable() {
+		_ = writeServerConf(database)
+		return fmt.Errorf("awg not on PATH (config file updated if -server-conf set)")
+	}
+	var err error
+	if removing {
+		err = awg.RemovePeerLive(*iface, peer.PublicKey.String())
+	} else {
+		err = awg.AddPeerLive(*iface, peer)
+	}
+	if err != nil {
+		return err
+	}
+	if removing {
+		fmt.Printf("Removed from %s without restart.\n", *iface)
+	} else {
+		fmt.Printf("Added to %s without restart.\n", *iface)
+	}
+	return writeServerConf(database)
+}
+
+func writeServerConf(database *db.DB) error {
+	if *serverConf == "" && *out == "" {
+		return nil
+	}
+	path := *serverConf
+	if path == "" {
+		path = *out
+	}
+	server, err := database.Server()
+	if err != nil {
+		return err
+	}
+	peers, err := database.AWGPeers()
+	if err != nil {
+		return err
+	}
+	config, err := server.ServerConfig(peers)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %s\n", path)
 	return nil
 }
 
@@ -324,4 +447,11 @@ func splitList(joined string) []string {
 		}
 	}
 	return items
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

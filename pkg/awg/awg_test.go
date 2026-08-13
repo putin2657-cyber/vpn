@@ -261,7 +261,7 @@ func TestClientConfigFullModeRoutesEverything(t *testing.T) {
 	}
 }
 
-func TestClientConfigSmartModeKeepsLocalServicesDirect(t *testing.T) {
+func TestClientConfigSmartModeExcludesRussianServices(t *testing.T) {
 	server, peer := testServer(t)
 
 	config, err := server.ClientConfig(peer, TunnelSmart)
@@ -269,17 +269,33 @@ func TestClientConfigSmartModeKeepsLocalServicesDirect(t *testing.T) {
 		t.Fatalf("ClientConfig: %v", err)
 	}
 
-	if strings.Contains(config, "0.0.0.0/0") || strings.Contains(config, "::/0") {
-		t.Fatal("smart mode must not capture the whole internet")
-	}
 	mustContain(t, config, []string{
+		"DNS = 1.1.1.1, 1.0.0.1",
 		"1.1.1.1/32",
-		"1.0.0.1/32",
-		"142.250.0.0/15",
-		"149.154.160.0/20",
-		"157.240.0.0/16",
 		"PersistentKeepalive = 25",
 	})
+	if strings.Contains(config, "AllowedIPs = 0.0.0.0/0, ::/0") {
+		t.Fatal("smart mode unexpectedly used a full-tunnel AllowedIPs line")
+	}
+	// Ozon aggregate must stay off the tunnel (ISP path).
+	if strings.Contains(config, "185.73.192.0/22") {
+		t.Fatal("excluded Ozon prefix leaked into AllowedIPs")
+	}
+	allowed := SmartAllowedIPs(server.DNS)
+	if len(allowed) < 20 {
+		t.Fatalf("smart AllowedIPs too small: %d", len(allowed))
+	}
+	if len(allowed) > 750 {
+		t.Fatalf("smart AllowedIPs too large for mobile clients: %d", len(allowed))
+	}
+	// DNS and Google/YouTube must lead the list so truncation cannot drop them.
+	if allowed[0] != "1.1.1.1/32" && allowed[0] != "1.0.0.1/32" {
+		t.Fatalf("expected DNS /32 at front of AllowedIPs, got %q", allowed[0])
+	}
+	joined := strings.Join(allowed[:32], ",")
+	if !strings.Contains(joined, "142.250.0.0/15") || !strings.Contains(joined, "74.125.0.0/16") {
+		t.Fatal("expected YouTube/Google force prefixes near the front of AllowedIPs")
+	}
 }
 
 func TestSmartRoutesAreValidCIDRs(t *testing.T) {

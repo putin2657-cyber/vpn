@@ -1,0 +1,15 @@
+[Unit]
+Description=VPN status API for Mac control app
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vpn
+EnvironmentFile=/opt/vpn/billing.env
+EnvironmentFile=-/opt/vpn/monitor.env
+Environment=STATUS_TOKEN=${STATUS_TOKEN}
+ExecStart=/opt/vpn/vpn-statusd -addr 127.0.0.1:8090 -db /opt/vpn/vpn.db
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

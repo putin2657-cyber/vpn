@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FamilyVPN" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">#0B0618</item>
+        <item name="android:windowBackground">#0B0618</item>
+        <item name="android:colorPrimary">#7B5CFF</item>
+    </style>
+</resources>
