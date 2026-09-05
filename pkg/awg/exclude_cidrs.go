@@ -32,16 +32,33 @@ var smartExcludeCIDRs = []string{
 	"95.163.32.0/19",
 	"185.30.176.0/22",
 	"217.69.128.0/20",
-	// Marketplaces (Ozon / WB / EdgeCenter)
+	// Marketplaces (Ozon / WB / EdgeCenter / wbbasket)
 	"37.220.160.0/20",
 	"45.133.96.0/22",
+	"85.198.76.0/22",    // WB static-basket
+	"176.101.88.0/21",   // WB CDN
 	"178.248.232.0/21",
 	"185.13.132.0/22",
+	"185.62.200.0/22",   // wildberries.ru / card.wb.ru
 	"185.65.148.0/22",
-	"185.73.192.0/22",
+	"185.73.192.0/22",   // Ozon
+	"185.138.252.0/22",  // wbbasket.ru
 	"185.178.208.0/22",
 	"185.184.128.0/22",
+	"213.184.152.0/21",  // WB static / geo CDN
+	"194.1.214.0/24",    // nel.wb.ru / seller.wildberries.ru
+	"91.230.107.0/24",   // nel.wb.ru
+	// Telegram DCs — keep on ISP in RU (VPN path stalls "connecting…" after a few minutes)
+	"91.108.4.0/22",
+	"91.108.8.0/22",
+	"91.108.12.0/22",
+	"91.108.16.0/22",
+	"91.108.56.0/22",
+	"149.154.160.0/20",
 	// Banks / fintech (coarse)
+	"62.76.205.0/24",    // Sber securepayments
+	"84.252.128.0/18",   // sberbank.ru / sber.ru / online.sberbank.ru
+	"91.206.127.0/24",   // Megamarket (Sber)
 	"185.157.96.0/22",
 	"194.54.12.0/22",
 	"213.165.192.0/19",

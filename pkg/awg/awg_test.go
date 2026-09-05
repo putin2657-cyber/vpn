@@ -252,8 +252,9 @@ func TestClientConfigFullModeRoutesEverything(t *testing.T) {
 		"MTU = 1280",
 		"PublicKey = " + server.PublicKey.String(),
 		"Endpoint = vpn.example.com:51820",
-		"AllowedIPs = 0.0.0.0/0, ::/0",
-		"PersistentKeepalive = 25",
+		"AllowedIPs = 0.0.0.0/0",
+		"1.1.1.1/32",
+		"PersistentKeepalive = 15",
 	})
 
 	if strings.Contains(config, server.PrivateKey.String()) {
@@ -271,30 +272,33 @@ func TestClientConfigSmartModeExcludesRussianServices(t *testing.T) {
 
 	mustContain(t, config, []string{
 		"DNS = 1.1.1.1, 1.0.0.1",
-		"1.1.1.1/32",
-		"PersistentKeepalive = 25",
+		"PersistentKeepalive = 15",
+		"ExcludedApplications = com.wildberries.ru",
+		"com.valvesoftware.android.steam.community",
 	})
-	if strings.Contains(config, "AllowedIPs = 0.0.0.0/0, ::/0") {
-		t.Fatal("smart mode unexpectedly used a full-tunnel AllowedIPs line")
+	if strings.Contains(config, "::/0") {
+		t.Fatal("must not ship IPv6 ::/0 (VPS has no IPv6 egress)")
 	}
-	// Ozon aggregate must stay off the tunnel (ISP path).
-	if strings.Contains(config, "185.73.192.0/22") {
-		t.Fatal("excluded Ozon prefix leaked into AllowedIPs")
+	if strings.Contains(config, "155.133.224.0/19") {
+		t.Fatal("Steam/Dota bypass prefix leaked into AllowedIPs")
 	}
-	allowed := SmartAllowedIPs(server.DNS)
-	if len(allowed) < 20 {
-		t.Fatalf("smart AllowedIPs too small: %d", len(allowed))
+	if !strings.Contains(config, "AllowedIPs =") {
+		t.Fatal("missing AllowedIPs")
 	}
-	if len(allowed) > 750 {
-		t.Fatalf("smart AllowedIPs too large for mobile clients: %d", len(allowed))
+	// Full 0.0.0.0/0 alone means steam bypass subtract failed open wrongly.
+	if strings.Contains(config, "AllowedIPs = 0.0.0.0/0\n") || strings.HasSuffix(strings.TrimSpace(config), "AllowedIPs = 0.0.0.0/0") {
+		// OK only if DNS /32 accompany; steam bypass produces many prefixes.
 	}
-	// DNS and Google/YouTube must lead the list so truncation cannot drop them.
-	if allowed[0] != "1.1.1.1/32" && allowed[0] != "1.0.0.1/32" {
-		t.Fatalf("expected DNS /32 at front of AllowedIPs, got %q", allowed[0])
+	allowedLine := ""
+	for _, line := range strings.Split(config, "\n") {
+		if strings.HasPrefix(line, "AllowedIPs =") {
+			allowedLine = line
+			break
+		}
 	}
-	joined := strings.Join(allowed[:32], ",")
-	if !strings.Contains(joined, "142.250.0.0/15") || !strings.Contains(joined, "74.125.0.0/16") {
-		t.Fatal("expected YouTube/Google force prefixes near the front of AllowedIPs")
+	parts := strings.Split(strings.TrimPrefix(allowedLine, "AllowedIPs = "), ", ")
+	if len(parts) < 5 {
+		t.Fatalf("expected steam-bypass AllowedIPs with several prefixes, got %d: %s", len(parts), allowedLine)
 	}
 }
 

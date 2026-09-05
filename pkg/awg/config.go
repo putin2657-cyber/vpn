@@ -3,15 +3,35 @@ package awg
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 )
 
 // DefaultListenPort is AmneziaWG's usual UDP port.
 const DefaultListenPort = 51820
 
-// DefaultMTU stays under common mobile and CGNAT ceilings. 1420 still
-// fragments on some LTE paths; 1280 is the safe floor that IPv6 also requires.
+// DefaultMTU stays under common mobile and CGNAT ceilings.
 const DefaultMTU = 1280
+
+// androidExcludedApps stay on the ISP path inside AmneziaWG/WireGuard on Android.
+// Package names are ignored by clients that do not support the key.
+var androidExcludedApps = []string{
+	"com.wildberries.ru",
+	"ru.ozon.app.android",
+	"ru.sberbankmobile",
+	"com.idamob.tinkoff.android",
+	"ru.vtb24.mobilebanking.android",
+	"ru.alfabank.mobile.android",
+	"logo.com.mbanking",
+	"ru.rostel",
+	"ru.yandex.androidkeyboard",
+	"ru.yandex.searchplugin",
+	"com.yandex.browser",
+	"ru.yandex.yandexmaps",
+	"ru.yandex.taxi",
+	"com.yandex.mobile.auth.sdk",
+	"com.valvesoftware.android.steam.community",
+}
 
 // Server describes the interface running on the VPS.
 type Server struct {
@@ -95,11 +115,20 @@ func (s *Server) ServerConfig(peers []Peer) (string, error) {
 	fmt.Fprintf(&b, "PostUp = iptables -A FORWARD -i %%i -o %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostUp = iptables -A FORWARD -i %%i -o %s -j ACCEPT\n", nic)
 	fmt.Fprintf(&b, "PostUp = iptables -A FORWARD -i %s -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n", nic)
+	// QUIC (UDP/443) over WireGuard often works for ~30–60s then collapses on
+	// mobile paths. Force HTTPS to TCP so YouTube/TikTok stay stable.
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD 1 -i %%i -p udp --dport 443 -j DROP\n")
+	// Clamp MSS so TCP sessions do not silently stall after a few minutes on
+	// mobile CGNAT / broken PMTUD paths (Telegram "connecting…", etc.).
+	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n")
+	fmt.Fprintf(&b, "PostUp = tc qdisc replace dev %s root fq_codel\n", nic)
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", s.Subnet, nic)
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -d %s -j MASQUERADE\n", s.Subnet, s.Subnet)
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT\n", nic)
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n", nic)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -p udp --dport 443 -j DROP\n")
+	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n")
 
 	for _, peer := range peers {
 		b.WriteString("\n")
@@ -145,6 +174,9 @@ func (s *Server) ClientConfig(peer Peer, mode TunnelMode) (string, error) {
 		fmt.Fprintf(&b, "DNS = %s\n", strings.Join(s.DNS, ", "))
 	}
 	fmt.Fprintf(&b, "MTU = %d\n", s.mtu())
+	// Android AmneziaWG/WireGuard: keep marketplace & bank apps on the ISP
+	// even if a destination IP is missing from the smart exclude list.
+	fmt.Fprintf(&b, "ExcludedApplications = %s\n", strings.Join(androidExcludedApps, ", "))
 
 	b.WriteString("\n")
 	b.WriteString(s.Obfuscation.render())
@@ -157,7 +189,7 @@ func (s *Server) ClientConfig(peer Peer, mode TunnelMode) (string, error) {
 	fmt.Fprintf(&b, "Endpoint = %s\n", s.Endpoint)
 	fmt.Fprintf(&b, "AllowedIPs = %s\n", s.clientAllowedIPs(mode))
 	// Keeps NAT mappings on mobile networks from expiring.
-	b.WriteString("PersistentKeepalive = 25\n")
+	b.WriteString("PersistentKeepalive = 15\n")
 
 	return b.String(), nil
 }
@@ -165,10 +197,64 @@ func (s *Server) ClientConfig(peer Peer, mode TunnelMode) (string, error) {
 func (s *Server) clientAllowedIPs(mode TunnelMode) string {
 	switch mode {
 	case TunnelSmart:
-		return strings.Join(SmartAllowedIPs(s.DNS), ", ")
+		// Full IPv4 tunnel minus a tiny Steam/Dota bypass list so games use the
+		// ISP while Discord stays on the VPN. IPv6 stays off (no VPS egress).
+		return steamBypassAllowedIPs(s.DNS)
 	default:
-		return "0.0.0.0/0, ::/0"
+		return fullIPv4AllowedIPs(s.DNS)
 	}
+}
+
+func steamBypassAllowedIPs(dns []string) string {
+	allowed, err := subtractCIDRs("0.0.0.0/0", steamBypassCIDRs)
+	if err != nil || len(allowed) == 0 {
+		return fullIPv4AllowedIPs(dns)
+	}
+	allowed = collapseCIDRStrings(allowed)
+	seen := make(map[string]struct{}, len(allowed)+len(dns)+2)
+	out := make([]string, 0, len(allowed)+len(dns)+2)
+	add := func(cidr string) {
+		if _, ok := seen[cidr]; ok {
+			return
+		}
+		seen[cidr] = struct{}{}
+		out = append(out, cidr)
+	}
+	for _, server := range dns {
+		server = strings.TrimSpace(server)
+		ip := net.ParseIP(server)
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		add(ip.To4().String() + "/32")
+	}
+	// Broadest prefixes first so mobile truncation keeps most of the internet.
+	sort.SliceStable(allowed, func(i, j int) bool {
+		return prefixLen(allowed[i]) < prefixLen(allowed[j])
+	})
+	for _, c := range allowed {
+		add(c)
+	}
+	return strings.Join(out, ", ")
+}
+
+func fullIPv4AllowedIPs(dns []string) string {
+	seen := map[string]struct{}{"0.0.0.0/0": {}}
+	out := []string{"0.0.0.0/0"}
+	for _, server := range dns {
+		server = strings.TrimSpace(server)
+		ip := net.ParseIP(server)
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		cidr := ip.To4().String() + "/32"
+		if _, ok := seen[cidr]; ok {
+			continue
+		}
+		seen[cidr] = struct{}{}
+		out = append(out, cidr)
+	}
+	return strings.Join(out, ", ")
 }
 
 func (s *Server) listenPort() int {

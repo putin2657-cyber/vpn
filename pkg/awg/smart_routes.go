@@ -11,7 +11,6 @@ import (
 var (
 	smartAllowedOnce sync.Once
 	smartAllowedIPv4 []string
-	smartAllowedIPv6 []string
 	smartAllowedErr  error
 )
 
@@ -23,29 +22,27 @@ func computeSmartAllowed() {
 		return
 	}
 	smartAllowedIPv4 = collapseCIDRStrings(smartAllowedIPv4)
-	smartAllowedIPv6, err = subtractCIDRs("::/0", smartExcludeIPv6CIDRs)
-	if err != nil {
-		smartAllowedErr = err
-		return
-	}
-	smartAllowedIPv6 = collapseCIDRStrings(smartAllowedIPv6)
+	// Intentionally no client IPv6 routes: many VPSes (including ours) have no
+	// public IPv6 egress. Shipping ::/0 black-holes YouTube AAAA after a few
+	// minutes of Happy Eyeballs retries.
 }
 
 // SmartAllowedIPs returns AllowedIPs for TunnelSmart: full tunnel minus the
 // curated Russian-service exclude list (banks, marketplaces, Yandex, gov…).
 //
-// Order matters for flaky mobile clients that truncate long AllowedIPs:
-//  1. DNS /32|/128
+// IPv4 only — see computeSmartAllowed. Order matters for flaky mobile clients
+// that truncate long AllowedIPs:
+//  1. DNS /32
 //  2. Google/YouTube force prefixes
 //  3. Remaining routes, broadest prefix first
 func SmartAllowedIPs(dns []string) []string {
 	smartAllowedOnce.Do(computeSmartAllowed)
 	if smartAllowedErr != nil {
-		// Fail open to full tunnel rather than break clients.
-		return []string{"0.0.0.0/0", "::/0"}
+		// Fail open to IPv4 full tunnel rather than break clients.
+		return []string{"0.0.0.0/0"}
 	}
 
-	seen := make(map[string]struct{}, len(smartAllowedIPv4)+len(smartAllowedIPv6)+len(dns)+len(smartForceVPN)+8)
+	seen := make(map[string]struct{}, len(smartAllowedIPv4)+len(dns)+len(smartForceVPN)+8)
 	var head, body []string
 	addHead := func(cidr string) {
 		if _, ok := seen[cidr]; ok {
@@ -75,15 +72,12 @@ func SmartAllowedIPs(dns []string) []string {
 			addHead(v4.String() + "/32")
 			continue
 		}
-		addHead(ip.String() + "/128")
+		// Skip IPv6 DNS — clients are IPv4-only.
 	}
 	for _, c := range smartForceVPN {
 		addHead(c)
 	}
 	for _, c := range smartAllowedIPv4 {
-		addBody(c)
-	}
-	for _, c := range smartAllowedIPv6 {
 		addBody(c)
 	}
 	sort.SliceStable(body, func(i, j int) bool {
@@ -133,7 +127,7 @@ func ValidateSmartRoutes() error {
 		return fmt.Errorf("smart allowed IPv4 list unexpectedly small: %d", len(smartAllowedIPv4))
 	}
 	// Mobile clients misbehave with enormous route tables.
-	if len(smartAllowedIPv4) > 700 {
+	if len(smartAllowedIPv4) > 800 {
 		return fmt.Errorf("smart allowed IPv4 list too large for mobile: %d", len(smartAllowedIPv4))
 	}
 	return nil

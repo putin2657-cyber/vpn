@@ -11,7 +11,7 @@ import (
 )
 
 // BrandName is the public product name shown in the bot.
-const BrandName = "FamilyVPN"
+const BrandName = "ecstasysVPN"
 
 // ApplyBranding sets the Telegram profile name, descriptions and command menu.
 func (b *Bot) ApplyBranding() error {
@@ -19,19 +19,19 @@ func (b *Bot) ApplyBranding() error {
 		return fmt.Errorf("setMyName: %w", err)
 	}
 	if err := b.postJSON("setMyDescription", map[string]any{
-		"description": "FamilyVPN — семейный VPN.\n" +
+		"description": "ecstasysVPN — личный VPN.\n" +
 			"Оплата " + PriceRubHuman + " ₽/мес (USDT или СБП), конфиг в один тап, Android-приложение и поддержка.",
 	}, nil); err != nil {
 		return fmt.Errorf("setMyDescription: %w", err)
 	}
 	if err := b.postJSON("setMyShortDescription", map[string]any{
-		"short_description": "Семейный VPN · " + PriceRubHuman + " ₽/мес · USDT / СБП",
+		"short_description": "ecstasysVPN · " + PriceRubHuman + " ₽/мес · USDT / СБП",
 	}, nil); err != nil {
 		return fmt.Errorf("setMyShortDescription: %w", err)
 	}
 
 	commands := []map[string]string{
-		{"command": "start", "description": "Главное меню FamilyVPN"},
+		{"command": "start", "description": "Главное меню ecstasysVPN"},
 		{"command": "pay", "description": "Оплатить / продлить подписку"},
 		{"command": "status", "description": "Статус подписки"},
 		{"command": "config", "description": "Скачать VPN-конфиг"},
@@ -55,8 +55,6 @@ func (b *Bot) SetProfilePhoto(path string) error {
 
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	// Bot API InputProfilePhotoStatic via nested multipart is awkward;
-	// use setMyProfilePhoto with photo as attach://file
 	_ = w.WriteField("photo", `{"type":"static","photo":"attach://avatar"}`)
 	part, err := w.CreateFormFile("avatar", filepath.Base(path))
 	if err != nil {

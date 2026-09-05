@@ -2,10 +2,12 @@ package tgbot
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -63,7 +65,20 @@ func (b *Bot) client() *http.Client {
 	if b.HTTP != nil {
 		return b.HTTP
 	}
-	return &http.Client{Timeout: 70 * time.Second}
+	// VPS has no public IPv6; prefer IPv4 so api.telegram.org does not hang on AAAA.
+	dialer := &net.Dialer{Timeout: 20 * time.Second}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{Timeout: 70 * time.Second, Transport: transport}
 }
 
 // PollUpdates long-polls Telegram for new messages.
@@ -195,7 +210,7 @@ func mainKeyboard(admin bool) map[string]any {
 	return map[string]any{
 		"keyboard":          rows,
 		"resize_keyboard":   true,
-		"input_field_placeholder": "FamilyVPN · выберите действие",
+		"input_field_placeholder": "ecstasysVPN · выберите действие",
 	}
 }
 

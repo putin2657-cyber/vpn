@@ -231,6 +231,8 @@ func handleCallback(svc *tgbot.Service, bot *tgbot.Bot, cb *tgbot.Callback) erro
 		return togglePeer(svc, bot, cb, strings.TrimPrefix(data, "peer_off:"), false)
 	case strings.HasPrefix(data, "peer_info:"):
 		return peerInfo(svc, bot, cb, strings.TrimPrefix(data, "peer_info:"))
+	case strings.HasPrefix(data, "peer_dl:"):
+		return downloadPeerConfig(svc, bot, cb, strings.TrimPrefix(data, "peer_dl:"))
 	default:
 		_ = bot.AnswerCallback(cb.ID, "")
 		return nil
@@ -495,18 +497,32 @@ func giveFreeConfig(svc *tgbot.Service, bot *tgbot.Bot, fromID, chatID int64) er
 	if !svc.Config.IsAdmin(fromID) {
 		return bot.SendText(chatID, "Нет доступа")
 	}
-	peer, err := svc.NextFreePeer()
-	if err != nil {
-		return bot.SendText(chatID, err.Error())
-	}
-	cfg, peer, err := svc.PeerConfig(peer.Name)
+	cfg, peer, err := svc.HandOutNextFreePeer()
 	if err != nil {
 		return bot.SendText(chatID, err.Error())
 	}
 	_ = bot.SendText(chatID, fmt.Sprintf(
-		"Свободный слот <code>%s</code> (%s).\nПерешли этот файл человеку. Один конфиг = одно устройство.",
+		"Выдан слот <code>%s</code> (%s) и закреплён — следующий «Выдать конфиг» возьмёт другой.\nПерешли этот файл человеку. Один конфиг = одно устройство.",
 		peer.Name, peer.Address))
-	return bot.SendDocument(chatID, peer.Name+".conf", "Свободный VPN-конфиг", cfg)
+	return bot.SendDocument(chatID, peer.Name+".conf", tgbot.BrandName+" · свободный слот", cfg)
+}
+
+func downloadPeerConfig(svc *tgbot.Service, bot *tgbot.Bot, cb *tgbot.Callback, peerName string) error {
+	if !svc.Config.IsAdmin(cb.From.ID) {
+		_ = bot.AnswerCallback(cb.ID, "Нет доступа")
+		return nil
+	}
+	cfg, peer, err := svc.PeerConfig(peerName)
+	if err != nil {
+		_ = bot.AnswerCallback(cb.ID, "Ошибка")
+		return bot.SendText(cb.Msg.Chat.ID, err.Error())
+	}
+	_ = bot.AnswerCallback(cb.ID, "Конфиг "+peer.Name)
+	caption := fmt.Sprintf("%s · %s · %s", tgbot.BrandName, peer.Name, peer.Address)
+	if m, err := svc.DB.GetMemberByPeerName(peer.Name); err == nil {
+		caption = fmt.Sprintf("%s · %s · %s", tgbot.BrandName, memberTelegramLabelLocal(m), peer.Name)
+	}
+	return bot.SendDocument(cb.Msg.Chat.ID, peer.Name+".conf", caption, cfg)
 }
 
 func adminConfirmCmd(svc *tgbot.Service, bot *tgbot.Bot, fromID, chatID int64, code string) error {
@@ -530,7 +546,7 @@ func sendConfig(svc *tgbot.Service, bot *tgbot.Bot, member *db.Member, chatID in
 		return bot.SendText(chatID, err.Error())
 	}
 	filename := member.PeerName + ".conf"
-	caption := "Импортируйте в AmneziaVPN / FamilyVPN."
+	caption := "Импортируйте в AmneziaVPN / ecstasysVPN."
 	return bot.SendDocument(chatID, filename, caption, config)
 }
 
@@ -657,7 +673,7 @@ func helpText(svc *tgbot.Service, member *db.Member) string {
 	}
 	b.WriteString("3. «Мой конфиг» — скачайте и импортируйте\n\n")
 	b.WriteString("<b>Android</b>\n")
-	b.WriteString("Кнопка «Android» — приложение FamilyVPN\n")
+	b.WriteString("Кнопка «Android» — приложение ecstasysVPN\n")
 	if u := strings.TrimSpace(svc.Config.AndroidAPKURL); u != "" {
 		b.WriteString(u + "\n")
 	}

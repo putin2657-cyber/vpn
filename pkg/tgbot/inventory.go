@@ -139,16 +139,16 @@ func FormatInventory(inv *Inventory) string {
 	writeOccupied("Занятые (оплачено)", SlotBusy)
 	writeOccupied("Занятые (без оплаты)", SlotUnpaid)
 
-	fmt.Fprintf(&b, "\n\nКнопки ниже — вкл/выкл. Сначала занятые, потом свободные. Owner скрыты.")
+	fmt.Fprintf(&b, "\n\nКнопки: инфо · скачать · вкл/выкл. Owner тоже можно скачать.")
 	return strings.TrimSpace(b.String())
 }
 
-// ManageKeyboard builds inline toggle buttons for non-owner peers.
-// Occupied (busy/unpaid) rows come first, then free. callback_data ≤64 bytes.
+// ManageKeyboard builds inline toggle + download buttons.
+// Occupied rows first, then free, then owner (download only). callback_data ≤64 bytes.
 func ManageKeyboard(inv *Inventory) [][]map[string]any {
 	var rows [][]map[string]any
-	appendSlot := func(slot Slot) {
-		if slot.Kind == SlotOwner || slot.Peer == nil {
+	appendSlot := func(slot Slot, allowToggle bool) {
+		if slot.Peer == nil {
 			return
 		}
 		name := slot.Peer.Name
@@ -159,8 +159,8 @@ func ManageKeyboard(inv *Inventory) [][]map[string]any {
 		if slot.Member != nil {
 			label = memberTelegramLabel(slot.Member)
 		}
-		if len(label) > 22 {
-			label = label[:22] + "…"
+		if len(label) > 18 {
+			label = label[:18] + "…"
 		}
 		state := "OFF"
 		if slot.Peer.Enabled {
@@ -172,27 +172,36 @@ func ManageKeyboard(inv *Inventory) [][]map[string]any {
 			prefix = "опл"
 		case SlotUnpaid:
 			prefix = "долг"
+		case SlotOwner:
+			prefix = "own"
 		}
 		if slot.Online {
 			state += "·live"
 		}
 		title := fmt.Sprintf("%s · %s · %s", prefix, label, state)
-		var action map[string]any
-		if slot.Peer.Enabled {
-			action = map[string]any{"text": "Выкл", "callback_data": "peer_off:" + name}
-		} else {
-			action = map[string]any{"text": "Вкл", "callback_data": "peer_on:" + name}
-		}
-		rows = append(rows, []map[string]any{
+		row := []map[string]any{
 			{"text": title, "callback_data": "peer_info:" + name},
-			action,
-		})
+			{"text": "⬇", "callback_data": "peer_dl:" + name},
+		}
+		if allowToggle {
+			if slot.Peer.Enabled {
+				row = append(row, map[string]any{"text": "Выкл", "callback_data": "peer_off:" + name})
+			} else {
+				row = append(row, map[string]any{"text": "Вкл", "callback_data": "peer_on:" + name})
+			}
+		}
+		rows = append(rows, row)
 	}
 	for _, kind := range []SlotKind{SlotBusy, SlotUnpaid, SlotFree} {
 		for _, slot := range inv.Slots {
 			if slot.Kind == kind {
-				appendSlot(slot)
+				appendSlot(slot, true)
 			}
+		}
+	}
+	for _, slot := range inv.Slots {
+		if slot.Kind == SlotOwner {
+			appendSlot(slot, false)
 		}
 	}
 	rows = append(rows, []map[string]any{
@@ -227,6 +236,26 @@ func (s *Service) NextFreePeer() (*db.Peer, error) {
 		}
 	}
 	return nil, fmt.Errorf("свободных конфигов нет — добавь peer через vpn-admin или пусть клиент оплатит в боте (создастся новый)")
+}
+
+// HandOutNextFreePeer reserves the next free peer so the same slot is not
+// handed out twice, then returns a client config for it.
+func (s *Service) HandOutNextFreePeer() (cfg string, peer *db.Peer, err error) {
+	peer, err = s.NextFreePeer()
+	if err != nil {
+		return "", nil, err
+	}
+	label := "handout:" + peer.Name
+	if _, err := s.DB.CreateMember(label, peer.Name); err != nil {
+		return "", nil, fmt.Errorf("не удалось закрепить слот %s: %w", peer.Name, err)
+	}
+	if !peer.Enabled {
+		_ = s.DB.SetPeerEnabled(peer.Name, true)
+		peer.Enabled = true
+		_ = s.syncPeers()
+	}
+	cfg, peer, err = s.PeerConfig(peer.Name)
+	return cfg, peer, err
 }
 
 // PeerConfig returns a smart client config for any peer (admin handout).

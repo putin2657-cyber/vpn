@@ -36,8 +36,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	caption := "Обновлённый конфиг FamilyVPN.\n\n" +
-		"Починили маршруты YouTube (smart-туннель).\n" +
+	caption := "Обновлённый конфиг ecstasysVPN.\n\n" +
 		"Импортируй файл заново в AmneziaWG и переподключи VPN."
 
 	sent := 0
@@ -63,7 +62,7 @@ func main() {
 			log.Printf("skip %s: config: %v", m.PeerName, err)
 			continue
 		}
-		name := "FamilyVPN-" + peer.Name + ".conf"
+		name := "ecstasysVPN-" + peer.Name + ".conf"
 		if err := bot.SendDocument(tgID, name, caption, cfg); err != nil {
 			log.Printf("send %s -> %d: %v", m.PeerName, tgID, err)
 			continue
